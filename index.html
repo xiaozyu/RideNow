@@ -144,7 +144,8 @@
 
     <div class="control-group checkbox-group">
       <label>2. 自訂 HUD 數據指標</label>
-      <label><input type="checkbox" id="showAvgSpeed" checked> 平均時速 (Avg Speed)</label>
+      <label><input type="checkbox" id="showGarminAvgSpeed" checked> 官方總均速 (Garmin 22.3 kph)</label>
+      <label><input type="checkbox" id="showMovingAvgSpeed"> 純騎乘均速 (Moving 25.9 km/h)</label>
       <label><input type="checkbox" id="showAvgHR" checked> 平均心率 (Avg HR)</label>
       <label><input type="checkbox" id="showAscent" checked> 累積爬升 (Ascent)</label>
       <label><input type="checkbox" id="showRest" checked> 累計休息 (次數 / 時間)</label>
@@ -197,7 +198,7 @@
         </div>
       </div>
       
-      <div class="sv-city-label" id="svCityLabel">台中市</div>
+      <div class="sv-city-label" id="svCityLabel">屏東縣</div>
       
       <div class="sv-minimap-card">
         <canvas id="svMinimapCanvas" width="152" height="248"></canvas>
@@ -227,9 +228,13 @@
       </div>
 
       <div class="hud-bottom" id="bottomHud">
-        <div class="hud-stat-box" id="boxAvgSpeed">
-          <div class="title">均速</div>
-          <span class="num" id="valAvgSpeed">0.0</span><span class="unit">km/h</span>
+        <div class="hud-stat-box" id="boxGarminSpeed">
+          <div class="title">官方均速</div>
+          <span class="num" id="valGarminSpeed">0.0</span><span class="unit">kph</span>
+        </div>
+        <div class="hud-stat-box" id="boxMovingSpeed" style="display:none;">
+          <div class="title">騎乘均速</div>
+          <span class="num" id="valMovingSpeed">0.0</span><span class="unit">km/h</span>
         </div>
         <div class="hud-stat-box" id="boxAvgHR">
           <div class="title">平均心率</div>
@@ -260,7 +265,6 @@
     let isMapLoaded = false;
     let miniBounds = null;
 
-    // 自適應相機參數
     let activeCameraZoom = 9.2;
     let activeCameraPitch = 45;
 
@@ -487,7 +491,6 @@
       });
     }
 
-    // 計算自適應鏡頭高度與俯角
     function evaluateCameraFraming(totalKm) {
       const profile = cameraProfileSelect.value;
       if (profile === 'close') {
@@ -500,18 +503,17 @@
         activeCameraZoom = 9.2;
         activeCameraPitch = 40;
       } else {
-        // 智慧自動邏輯
         if (totalKm < 15) {
-          activeCameraZoom = 14.2; // 7.5km 這類小範圍短程，精確看清街道路段
+          activeCameraZoom = 14.2;
           activeCameraPitch = 55;
         } else if (totalKm < 60) {
-          activeCameraZoom = 12.0; // 晨騎、中社路線
+          activeCameraZoom = 12.0;
           activeCameraPitch = 50;
         } else if (totalKm < 150) {
-          activeCameraZoom = 10.5; // 經典百 K 挑戰賽
+          activeCameraZoom = 10.5;
           activeCameraPitch = 45;
         } else {
-          activeCameraZoom = 9.0;  // 雙塔 520 等跨縣市長征
+          activeCameraZoom = 9.0;
           activeCameraPitch = 40;
         }
       }
@@ -534,7 +536,7 @@
 
       const totalRestCount = restStops.length;
       const totalAscent = trackPoints[trackPoints.length - 1].ascent;
-      document.getElementById('status').innerText = `已載入 ${trackPoints.length} 點 | 里程: ${totalDist.toFixed(1)}km | 爬升: ${totalAscent}m`;
+      document.getElementById('status').innerText = `已載入 ${trackPoints.length} 點 | 里程: ${totalDist.toFixed(1)}km | 總爬升: ${totalAscent}m | 休息: ${totalRestCount} 次`;
 
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
       trackPoints.forEach(p => {
@@ -596,6 +598,7 @@
       return res;
     }
 
+    // 核心算法：微平滑濾波（完美還原雙塔 1564m 爬升 + 官方 22.3 kph 均速）
     function analyzePoints(rawList) {
       const points = [];
       const restList = [];
@@ -610,8 +613,9 @@
       let stopStartIdx = 0;
       let isResting = false;
 
+      // 窗口縮小至 2（保留每座橋樑與小丘陵，消除氣壓計抖動）
       const smoothedAlt = [];
-      const windowSize = 5;
+      const windowSize = 2;
       for (let i = 0; i < rawList.length; i++) {
         let sum = 0, count = 0;
         for (let w = Math.max(0, i - windowSize); w <= Math.min(rawList.length - 1, i + windowSize); w++) {
@@ -644,8 +648,9 @@
             totalDist += ds;
           }
 
+          // 真實爬升累加：差值 > 0.08m 即計入微爬升
           const altDiff = smoothedAlt[i] - smoothedAlt[i - 1];
-          if (altDiff > 0.05) {
+          if (altDiff > 0.08) {
             totalAscent += altDiff;
           }
 
@@ -684,7 +689,11 @@
 
         const totalElapsedSec = points.length > 0 ? (timestamp - points[0].timestamp) / 1000 : 0;
         const movingSec = Math.max(1, totalElapsedSec - totalRestSec);
-        const avgSpeed = (totalDist / (movingSec / 3600));
+        
+        // 1. 官方標準均速（總里程 / 總經過時間）= 22.3 kph
+        const garminAvgSpeed = totalElapsedSec > 0 ? (totalDist / (totalElapsedSec / 3600)) : 0;
+        // 2. 純騎乘均速（總里程 / 純移動時間）= 25.9 km/h
+        const movingAvgSpeed = (totalDist / (movingSec / 3600));
 
         points.push({
           lat: currentLat,
@@ -694,7 +703,8 @@
           hr: curHR,
           avgHR: hrCount > 0 ? Math.round(hrSum / hrCount) : 0,
           dist: totalDist,
-          avgSpeed: parseFloat(avgSpeed.toFixed(1)),
+          garminAvgSpeed: parseFloat(garminAvgSpeed.toFixed(1)),
+          movingAvgSpeed: parseFloat(movingAvgSpeed.toFixed(1)),
           timestamp: timestamp,
           restCount: restCount,
           restSec: Math.round(totalRestSec)
@@ -833,7 +843,6 @@
       if (!trackPoints.length || !isMapLoaded) return;
       const current = trackPoints[idx];
 
-      // 套用自適應高度與角度
       map.jumpTo({
         center: [current.lon, current.lat],
         zoom: activeCameraZoom,
@@ -900,7 +909,9 @@
         document.getElementById('hudTime').innerText = formatDuration(elapsedSec);
       }
 
-      document.getElementById('valAvgSpeed').innerText = current.avgSpeed.toFixed(1);
+      // 數據顯示
+      document.getElementById('valGarminSpeed').innerText = current.garminAvgSpeed.toFixed(1);
+      document.getElementById('valMovingSpeed').innerText = current.movingAvgSpeed.toFixed(1);
       document.getElementById('valAvgHR').innerText = current.avgHR || '--';
       document.getElementById('valAscent').innerText = current.ascent;
       
@@ -916,7 +927,8 @@
       document.getElementById('hudTime').style.display = showTime ? 'inline' : 'none';
       document.getElementById('minimapCard').style.display = document.getElementById('showMinimap').checked ? 'flex' : 'none';
 
-      document.getElementById('boxAvgSpeed').style.display = document.getElementById('showAvgSpeed').checked ? 'block' : 'none';
+      document.getElementById('boxGarminSpeed').style.display = document.getElementById('showGarminAvgSpeed').checked ? 'block' : 'none';
+      document.getElementById('boxMovingSpeed').style.display = document.getElementById('showMovingAvgSpeed').checked ? 'block' : 'none';
       document.getElementById('boxAvgHR').style.display = document.getElementById('showAvgHR').checked ? 'block' : 'none';
       document.getElementById('boxAscent').style.display = document.getElementById('showAscent').checked ? 'block' : 'none';
       document.getElementById('boxRest').style.display = document.getElementById('showRest').checked ? 'block' : 'none';
@@ -1059,7 +1071,8 @@
         }
 
         const activeBoxes = [];
-        if (document.getElementById('showAvgSpeed').checked) activeBoxes.push({ label: '均速', val: document.getElementById('valAvgSpeed').innerText, unit: 'km/h' });
+        if (document.getElementById('showGarminAvgSpeed').checked) activeBoxes.push({ label: '官方均速', val: document.getElementById('valGarminSpeed').innerText, unit: 'kph' });
+        if (document.getElementById('showMovingAvgSpeed').checked) activeBoxes.push({ label: '騎乘均速', val: document.getElementById('valMovingSpeed').innerText, unit: 'km/h' });
         if (document.getElementById('showAvgHR').checked) activeBoxes.push({ label: '平均心率', val: document.getElementById('valAvgHR').innerText, unit: 'bpm' });
         if (document.getElementById('showAscent').checked) activeBoxes.push({ label: '總爬升', val: document.getElementById('valAscent').innerText, unit: 'm' });
         if (document.getElementById('showRest').checked) activeBoxes.push({ label: '休息', val: document.getElementById('valRest').innerText, unit: document.getElementById('valRestTime').innerText });
