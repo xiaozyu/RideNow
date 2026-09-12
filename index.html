@@ -485,7 +485,8 @@
 
       const totalRestCount = restStops.length;
       const totalRestMin = restStops.length > 0 ? Math.round(restStops[restStops.length - 1].accumRestSec / 60) : 0;
-      document.getElementById('status').innerText = `已載入 ${trackPoints.length} 點 | 休息: ${totalRestCount} 次 (總計 ${totalRestMin} 分鐘)`;
+      const totalAscent = trackPoints[trackPoints.length - 1].ascent;
+      document.getElementById('status').innerText = `已載入 ${trackPoints.length} 點 | 總爬升: ${totalAscent}m | 休息: ${totalRestCount} 次`;
 
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
       trackPoints.forEach(p => {
@@ -540,6 +541,7 @@
       return res;
     }
 
+    // 核心修復：在原始完整點位上進行真實累計爬升運算（還原 1500m+ 爬升）
     function analyzePoints(rawList) {
       const points = [];
       const restList = [];
@@ -553,6 +555,18 @@
       let currentStopSec = 0;
       let stopStartIdx = 0;
       let isResting = false;
+
+      // 建立滑動平均平滑海拔陣列，過濾氣壓計微抖動（窗口大小 5）
+      const smoothedAlt = [];
+      const windowSize = 5;
+      for (let i = 0; i < rawList.length; i++) {
+        let sum = 0, count = 0;
+        for (let w = Math.max(0, i - windowSize); w <= Math.min(rawList.length - 1, i + windowSize); w++) {
+          sum += (rawList[w].alt || 0);
+          count++;
+        }
+        smoothedAlt.push(sum / count);
+      }
 
       for (let i = 0; i < rawList.length; i++) {
         const item = rawList[i];
@@ -577,8 +591,10 @@
             totalDist += ds;
           }
 
-          if (currentAlt > prev.alt && (currentAlt - prev.alt) > 0.8) {
-            totalAscent += (currentAlt - prev.alt);
+          // 真實微爬升累積：使用平滑後的氣壓高度，只要是正上升就真實累加
+          const altDiff = smoothedAlt[i] - smoothedAlt[i - 1];
+          if (altDiff > 0.05) {
+            totalAscent += altDiff;
           }
 
           const instSpeed = (dt > 0) ? (ds / dt) * 3600 : 0;
@@ -894,7 +910,7 @@
       else runAnimation();
     });
 
-    // 專屬 9:16 純淨輸出（徹底修復黑塊問題）
+    // 專屬 9:16 純淨輸出（無黑塊、純淨渲染）
     document.getElementById('btnRecord').addEventListener('click', function() {
       const btn = this;
       btn.disabled = true;
@@ -907,7 +923,7 @@
       function composeFrame() {
         recCtx.drawImage(mapCanvas, 0, 0, recCanvas.width, recCanvas.height);
 
-        // 1. 繪製休息站標籤至影片（加入防黑塊邏輯）
+        // 繪製休息站標籤至影片
         if (document.getElementById('showRestMarkers').checked) {
           const currentProgress = parseFloat(scrubber.value) / 1000;
           const currentIdx = Math.min(trackPoints.length - 1, Math.floor(currentProgress * trackPoints.length));
@@ -919,7 +935,6 @@
             const sx = (p.x / map.getContainer().clientWidth) * recCanvas.width;
             const sy = (p.y / map.getContainer().clientHeight) * recCanvas.height;
 
-            // 休息藍點
             recCtx.beginPath();
             recCtx.arc(sx, sy, 8, 0, Math.PI * 2);
             recCtx.fillStyle = '#00ffff';
@@ -929,13 +944,10 @@
             recCtx.stroke();
 
             const txt = `${r.order}次 ${formatMinOnly(r.durationSec)} / ${formatClockTime(r.accumRestSec)}`;
-            
-            // 設定高相容標準字型
             recCtx.font = 'bold 20px -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif';
             recCtx.textBaseline = 'middle';
             const tw = recCtx.measureText(txt).width;
 
-            // 只有文字長度有效時才繪製背景底框，防止空字串黑塊
             if (tw > 0) {
               recCtx.fillStyle = 'rgba(5, 17, 30, 0.88)';
               recCtx.strokeStyle = '#00ffff';
@@ -945,14 +957,12 @@
               recCtx.fill();
               recCtx.stroke();
 
-              // 亮白文字 + 陰影確保絕對可見
               recCtx.fillStyle = '#ffffff';
               recCtx.fillText(txt, sx + 23, sy);
             }
           });
         }
 
-        // 2. 頂部 HUD
         const showDist = document.getElementById('showDist').checked;
         const showTime = document.getElementById('showTime').checked;
         if (showDist || showTime) {
@@ -989,7 +999,6 @@
           }
         }
 
-        // 3. 右上角縮圖
         if (document.getElementById('showMinimap').checked) {
           recCtx.fillStyle = 'rgba(18, 18, 18, 0.88)';
           recCtx.beginPath();
@@ -998,7 +1007,6 @@
           recCtx.drawImage(miniCanvas, recCanvas.width - 180, 32, 148, 250);
         }
 
-        // 4. 底部數據
         const activeBoxes = [];
         if (document.getElementById('showAvgSpeed').checked) activeBoxes.push({ label: '均速', val: document.getElementById('valAvgSpeed').innerText, unit: 'km/h' });
         if (document.getElementById('showAvgHR').checked) activeBoxes.push({ label: '平均心率', val: document.getElementById('valAvgHR').innerText, unit: 'bpm' });
