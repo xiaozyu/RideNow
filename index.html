@@ -53,6 +53,29 @@
     }
     #minimapCanvas { width: 100%; height: 100%; }
 
+    /* Google 街景小人按鈕 */
+    #streetview-pegman {
+      position: absolute; right: 16px; bottom: 170px; width: 44px; height: 44px;
+      background: #ffffff; border-radius: 50%; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      display: flex; align-items: center; justify-content: center; cursor: pointer;
+      z-index: 30; border: 2px solid #fc5200; transition: transform 0.15s;
+    }
+    #streetview-pegman:hover { transform: scale(1.1); }
+    #streetview-pegman.active { background: #fc5200; }
+    #streetview-pegman svg { width: 26px; height: 26px; }
+
+    /* 街景彈窗全螢幕 Modal */
+    #streetviewModal {
+      display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      background: #000; z-index: 50; flex-direction: column;
+    }
+    #streetviewModal iframe { width: 100%; height: 100%; border: none; }
+    #closeModal {
+      position: absolute; top: 12px; right: 12px; background: rgba(0,0,0,0.7);
+      color: #fff; border: 1px solid #fff; border-radius: 4px; padding: 6px 12px;
+      font-size: 12px; font-weight: bold; cursor: pointer; z-index: 55;
+    }
+
     .hud-bottom {
       background: rgba(18, 18, 18, 0.85); backdrop-filter: blur(8px);
       padding: 12px 6px; border-radius: 14px; display: flex; justify-content: space-around; text-align: center;
@@ -80,7 +103,7 @@
       <label><input type="checkbox" id="showAvgHR" checked> 平均心率 (Avg HR)</label>
       <label><input type="checkbox" id="showAscent" checked> 累積爬升 (Ascent)</label>
       <label><input type="checkbox" id="showRest" checked> 累計休息 (次數 / 時間)</label>
-      <label><input type="checkbox" id="showRestMarkers" checked> 地圖顯示休息次數與時間</label>
+      <label><input type="checkbox" id="showRestMarkers" checked> 地圖標記休息時間與引線</label>
       <label><input type="checkbox" id="showDist" checked> 累積里程與進度</label>
       <label><input type="checkbox" id="showTime" checked> 已騎乘時間</label>
       <label><input type="checkbox" id="showMinimap" checked> 右上角全島雷達圖</label>
@@ -108,6 +131,20 @@
 
   <div id="render-container">
     <div id="map"></div>
+
+    <!-- 經典 Google 街景小人按鈕 -->
+    <div id="streetview-pegman" title="點擊切換街景選取模式">
+      <svg viewBox="0 0 24 24">
+        <circle cx="12" cy="5" r="3" fill="#fbbc04"/>
+        <path d="M12 9c-2.2 0-4 1.8-4 4v7h2.5v-5h3v5H16v-7c0-2.2-1.8-4-4-4z" fill="#fbbc04"/>
+      </svg>
+    </div>
+
+    <!-- 街景載入視窗 -->
+    <div id="streetviewModal">
+      <button id="closeModal">關閉街景</button>
+      <iframe id="svFrame" src=""></iframe>
+    </div>
 
     <div class="hud-overlay" id="hudContainer">
       <div class="hud-top-bar">
@@ -157,6 +194,7 @@
     let startTimeEpoch = 0;
     let isMapLoaded = false;
     let miniBounds = null;
+    let isPegmanActive = false;
 
     const satelliteStyle = {
       version: 8,
@@ -210,7 +248,7 @@
         paint: { 'line-color': '#fc5200', 'line-width': 4 }
       });
 
-      // 休息站藍點
+      // 休息站藍點圖層
       map.addSource('rest-stops', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] }
@@ -227,22 +265,22 @@
         }
       });
 
-      // 休息文字：次數 本次時間 / 總累計時間
+      // 斜引線 + 休息文字標籤圖層
       map.addLayer({
         id: 'rest-stops-labels',
         type: 'symbol',
         source: 'rest-stops',
         layout: {
           'text-field': ['get', 'label'],
-          'text-size': 11,
-          'text-offset': [0.9, -0.2],
-          'text-anchor': 'left',
+          'text-size': 12,
+          'text-offset': [1.2, -1.0], // 往右上角拉開距離（像引線標記）
+          'text-anchor': 'bottom-left',
           'text-allow-overlap': true
         },
         paint: {
           'text-color': '#ffffff',
           'text-halo-color': '#05111e',
-          'text-halo-width': 2.5
+          'text-halo-width': 3
         }
       });
 
@@ -263,6 +301,49 @@
       });
 
       if (trackPoints.length > 0) initRoute();
+    });
+
+    // 街景小人開關與點擊行為
+    const pegmanBtn = document.getElementById('streetview-pegman');
+    pegmanBtn.addEventListener('click', () => {
+      isPegmanActive = !isPegmanActive;
+      pegmanBtn.classList.toggle('active', isPegmanActive);
+      map.getCanvas().style.cursor = isPegmanActive ? 'crosshair' : '';
+    });
+
+    // 地圖點擊：若處於小人模式或點擊藍點，立即調出 Google 街景
+    map.on('click', (e) => {
+      let targetCoords = null;
+
+      // 檢查是否直接點擊到休息藍點
+      const features = map.queryRenderedFeatures(e.point, { layers: ['rest-stops-points'] });
+      if (features.length > 0) {
+        targetCoords = features[0].geometry.coordinates;
+      } else if (isPegmanActive) {
+        targetCoords = [e.lngLat.lng, e.lngLat.lat];
+      }
+
+      if (targetCoords) {
+        openStreetView(targetCoords[1], targetCoords[0]);
+        if (isPegmanActive) {
+          isPegmanActive = false;
+          pegmanBtn.classList.remove('active');
+          map.getCanvas().style.cursor = '';
+        }
+      }
+    });
+
+    function openStreetView(lat, lon) {
+      const modal = document.getElementById('streetviewModal');
+      const frame = document.getElementById('svFrame');
+      // 使用 Google Maps 官方 StreetView 內嵌網址
+      frame.src = `https://maps.google.com/maps?q=&layer=c&cbll=${lat},${lon}&cbp=11,0,0,0,0&output=svembed`;
+      modal.style.display = 'flex';
+    }
+
+    document.getElementById('closeModal').addEventListener('click', () => {
+      document.getElementById('streetviewModal').style.display = 'none';
+      document.getElementById('svFrame').src = '';
     });
 
     const scrubber = document.getElementById('progressScrubber');
@@ -549,7 +630,6 @@
       return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     }
 
-    // 將秒數轉換為 分 或 時:分 格式
     function formatClockTime(sec) {
       const h = Math.floor(sec / 3600);
       const m = Math.floor((sec % 3600) / 60);
@@ -633,7 +713,7 @@
         });
       }
 
-      // 休息站與「次數 本次時間 / 總累計時間」標籤渲染
+      // 休息站藍點與「1次 3分 / 0:3」格式渲染
       const showRestMarkers = document.getElementById('showRestMarkers').checked;
       const passedRestStops = restStops.filter(r => r.dist <= current.dist);
 
@@ -725,6 +805,7 @@
       else runAnimation();
     });
 
+    // 專屬 9:16 純淨輸出
     document.getElementById('btnRecord').addEventListener('click', function() {
       const btn = this;
       btn.disabled = true;
