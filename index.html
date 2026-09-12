@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <title>RideNow - 單車動態視覺化</title>
-  <!-- 引入 Mapbox GL JS (高效能 WebGL 地圖庫) -->
-  <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
-  <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+  <!-- 改用完全開源免金鑰的 MapLibre GL JS -->
+  <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
   <style>
     body {
       margin: 0; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -22,21 +22,19 @@
     }
     button:disabled { background: #555; cursor: not-allowed; }
 
-    /* 9:16 直式限動容器 */
     #render-container {
       position: relative; width: 360px; height: 640px;
       border-radius: 16px; overflow: hidden; background: #000; border: 2px solid #333;
     }
     #map { width: 100%; height: 100%; }
 
-    /* 疊加在衛星地圖上的 HUD 介面 */
     .hud-overlay {
       position: absolute; top: 0; left: 0; width: 100%; height: 100%;
       pointer-events: none; display: flex; flex-direction: column; justify-content: space-between;
-      padding: 20px; box-sizing: border-box;
+      padding: 20px; box-sizing: border-box; z-index: 10;
     }
     .hud-top {
-      background: rgba(18, 18, 18, 0.8); backdrop-filter: blur(8px);
+      background: rgba(18, 18, 18, 0.85); backdrop-filter: blur(8px);
       padding: 12px 16px; border-radius: 12px; display: flex; align-items: baseline; gap: 8px;
     }
     .hud-top .dist { font-size: 24px; font-weight: bold; color: #fff; }
@@ -80,7 +78,6 @@
     </div>
   </div>
 
-  <!-- 視覺化展示主體 -->
   <div id="render-container">
     <div id="map"></div>
     <div class="hud-overlay" id="hudContainer">
@@ -106,41 +103,41 @@
   </div>
 
   <script>
-    let rawPoints = [];
     let trackPoints = [];
     let isPlaying = false;
     let animFrame = null;
 
-    // 衛星實景樣式
+    // 免 Token 的 ESRI 實景衛星圖設定
     const satelliteStyle = {
       version: 8,
       sources: {
-        'esri-satellite': {
+        'esri-tiles': {
           type: 'raster',
-          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+          tiles: [
+            'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+          ],
           tileSize: 256
         }
       },
       layers: [{
         id: 'esri-layer',
         type: 'raster',
-        source: 'esri-satellite',
+        source: 'esri-tiles',
         minzoom: 0,
-        maxzoom: 19
+        maxzoom: 18
       }]
     };
 
-    const map = new mapboxgl.Map({
+    const map = new maplibregl.Map({
       container: 'map',
       style: satelliteStyle,
       center: [120.982024, 23.973875],
-      zoom: 6.8,
-      interactive: true,
-      preserveDrawingBuffer: true // 允許 MediaRecorder 直接擷取 WebGL 畫面
+      zoom: 7,
+      preserveDrawingBuffer: true
     });
 
     map.on('load', () => {
-      // 底層軌跡底線 (半透明深色)
+      // 軌跡全路徑底線
       map.addSource('full-route', {
         type: 'geojson',
         data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] } }
@@ -149,10 +146,10 @@
         id: 'full-route-line',
         type: 'line',
         source: 'full-route',
-        paint: { 'line-color': '#000000', 'line-width': 5, 'line-opacity': 0.4 }
+        paint: { 'line-color': '#000000', 'line-width': 5, 'line-opacity': 0.5 }
       });
 
-      // 跑動中的高亮橘色軌跡
+      // 動態橘色行進線
       map.addSource('active-route', {
         type: 'geojson',
         data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] } }
@@ -164,7 +161,7 @@
         paint: { 'line-color': '#fc5200', 'line-width': 4 }
       });
 
-      // 車頭動態亮點
+      // 亮點游標
       map.addSource('point-cursor', {
         type: 'geojson',
         data: { type: 'Feature', geometry: { type: 'Point', coordinates: [0, 0] } }
@@ -182,28 +179,30 @@
       });
     });
 
-    // 檔案匯入
     document.getElementById('tcxInput').addEventListener('change', function(e) {
       const file = e.target.files[0];
       if (!file) return;
 
       const reader = new FileReader();
       reader.onload = function(evt) {
-        rawPoints = parseTCX(evt.target.result);
-        if (rawPoints.length > 0) {
-          trackPoints = downsample(rawPoints, 1200);
+        const raw = parseTCX(evt.target.result);
+        if (raw.length > 0) {
+          trackPoints = downsample(raw, 1200);
           document.getElementById('status').innerText = `已解析 ${trackPoints.length} 個點位`;
           document.getElementById('btnPlay').disabled = false;
           document.getElementById('btnRecord').disabled = false;
 
-          // 載入全路線並自適應縮放至置中
           const coords = trackPoints.map(p => [p.lon, p.lat]);
-          map.getSource('full-route').setData({
-            type: 'Feature',
-            geometry: { type: 'LineString', coordinates: coords }
-          });
+          
+          if (map.getSource('full-route')) {
+            map.getSource('full-route').setData({
+              type: 'Feature',
+              geometry: { type: 'LineString', coordinates: coords }
+            });
+          }
 
-          const bounds = coords.reduce((b, coord) => b.extend(coord), new mapboxgl.LngLatBounds(coords[0], coords[0]));
+          // 自動居中縮放路線
+          const bounds = coords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
           map.fitBounds(bounds, { padding: 40, duration: 0 });
 
           updateFrame(0);
@@ -263,23 +262,25 @@
       return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     }
 
-    // 更新特定影格的軌跡與數值
     function updateFrame(idx) {
       if (!trackPoints.length) return;
       const current = trackPoints[idx];
       const activeCoords = trackPoints.slice(0, idx + 1).map(p => [p.lon, p.lat]);
 
-      // 動態更新地圖軌跡
-      map.getSource('active-route').setData({
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: activeCoords }
-      });
-      map.getSource('point-cursor').setData({
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: [current.lon, current.lat] }
-      });
+      if (map.getSource('active-route')) {
+        map.getSource('active-route').setData({
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: activeCoords }
+        });
+      }
+      if (map.getSource('point-cursor')) {
+        map.getSource('point-cursor').setData({
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [current.lon, current.lat] }
+        });
+      }
 
-      // 更新 HUD
+      // 數據面板更新
       const totalDist = trackPoints[trackPoints.length - 1].dist || 1;
       const pct = Math.min(100, Math.round((current.dist / totalDist) * 100));
 
@@ -291,14 +292,12 @@
       document.getElementById('valHR').style.color = (current.hr > 165) ? '#ff4d4f' : '#fff';
       document.getElementById('valElev').innerText = current.alt;
 
-      // 依勾選狀態顯隱
       document.getElementById('topHud').style.display = document.getElementById('showProgress').checked ? 'flex' : 'none';
       document.getElementById('boxSpeed').style.display = document.getElementById('showSpeed').checked ? 'block' : 'none';
       document.getElementById('boxHR').style.display = document.getElementById('showHR').checked ? 'block' : 'none';
       document.getElementById('boxElev').style.display = document.getElementById('showElevation').checked ? 'block' : 'none';
     }
 
-    // 播放邏輯
     function runAnimation(onFinish) {
       if (isPlaying) return;
       isPlaying = true;
@@ -331,7 +330,6 @@
       runAnimation();
     });
 
-    // 錄影匯出（直接抓取 Mapbox WebGL Canvas）
     document.getElementById('btnRecord').addEventListener('click', function() {
       const btn = this;
       btn.disabled = true;
