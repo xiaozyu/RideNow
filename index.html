@@ -50,9 +50,6 @@
     .hud-stat-box .title { font-size: 11px; color: #888; font-weight: bold; margin-bottom: 2px; }
     .hud-stat-box .num { font-size: 20px; font-weight: bold; color: #fff; }
     .hud-stat-box .unit { font-size: 10px; color: #aaa; margin-left: 1px; }
-
-    /* 後台合成錄影畫布（隱藏） */
-    #recorderCanvas { display: none; }
   </style>
 </head>
 <body>
@@ -130,14 +127,13 @@
     </div>
   </div>
 
-  <canvas id="recorderCanvas" width="720" height="1280"></canvas>
-
   <script>
     let trackPoints = [];
     let isPlaying = false;
-    let animFrame = null;
+    let animTimer = null;
     let startTimeEpoch = 0;
     let fullBounds = null;
+    let isMapLoaded = false;
 
     const satelliteStyle = {
       version: 8,
@@ -163,11 +159,11 @@
       center: [120.982024, 23.973875],
       zoom: 7,
       pitch: 0,
-      bearing: 0,
-      preserveDrawingBuffer: true
+      bearing: 0
     });
 
     map.on('load', () => {
+      isMapLoaded = true;
       map.addSource('full-route', {
         type: 'geojson',
         data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] } }
@@ -205,6 +201,8 @@
           'circle-stroke-color': '#fc5200'
         }
       });
+
+      if (trackPoints.length > 0) initRouteLayers();
     });
 
     const scrubber = document.getElementById('progressScrubber');
@@ -219,7 +217,7 @@
       reader.onload = function(evt) {
         const raw = parseTCX(evt.target.result);
         if (raw.length > 0) {
-          trackPoints = downsample(raw, 1000);
+          trackPoints = downsample(raw, 900);
           startTimeEpoch = trackPoints[0].timestamp;
           document.getElementById('status').innerText = `已載入 ${trackPoints.length} 個點位`;
           
@@ -230,25 +228,31 @@
           scrubberTxt.innerText = "0%";
 
           const coords = trackPoints.map(p => [p.lon, p.lat]);
-          if (map.getSource('full-route')) {
-            map.getSource('full-route').setData({
-              type: 'Feature',
-              geometry: { type: 'LineString', coordinates: coords }
-            });
-          }
-
           fullBounds = coords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
-          updateFrame(0);
+
+          if (isMapLoaded) initRouteLayers();
         }
       };
       reader.readAsText(file);
     });
 
+    function initRouteLayers() {
+      const coords = trackPoints.map(p => [p.lon, p.lat]);
+      if (map.getSource('full-route')) {
+        map.getSource('full-route').setData({
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: coords }
+        });
+      }
+      updateFrame(0);
+    }
+
     scrubber.addEventListener('input', function(e) {
       if (trackPoints.length === 0) return;
       if (isPlaying) stopAnimation();
-      const progress = parseFloat(e.target.value) / 1000;
-      scrubberTxt.innerText = `${(progress * 100).toFixed(0)}%`;
+      const val = Math.max(0, Math.min(1000, parseInt(e.target.value, 10)));
+      const progress = val / 1000;
+      scrubberTxt.innerText = `${Math.round(progress * 100)}%`;
       const idx = Math.min(trackPoints.length - 1, Math.floor(progress * trackPoints.length));
       updateFrame(idx);
     });
@@ -324,7 +328,6 @@
       return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     }
 
-    // 計算兩個經緯度之間的方位角（0° ~ 360°）
     function getBearing(startLat, startLng, destLat, destLng) {
       const y = Math.sin((destLng - startLng) * Math.PI / 180) * Math.cos(destLat * Math.PI / 180);
       const x = Math.cos(startLat * Math.PI / 180) * Math.sin(destLat * Math.PI / 180) -
@@ -340,57 +343,57 @@
     }
 
     function updateFrame(idx) {
-      if (!trackPoints.length) return;
+      if (!trackPoints.length || !isMapLoaded) return;
       const current = trackPoints[idx];
       const mode = cameraModeSelect.value;
 
-      // 1. 動態鏡頭運鏡邏輯
-      if (mode === 'chase') {
-        // 取下一個點計算當前行進方位
-        const nextIdx = Math.min(idx + 3, trackPoints.length - 1);
-        const nextPt = trackPoints[nextIdx];
-        const bearing = (idx < trackPoints.length - 1) 
-          ? getBearing(current.lat, current.lon, nextPt.lat, nextPt.lon)
-          : map.getBearing();
+      try {
+        if (mode === 'chase') {
+          const nextIdx = Math.min(idx + 2, trackPoints.length - 1);
+          const nextPt = trackPoints[nextIdx];
+          const bearing = (idx < trackPoints.length - 1) 
+            ? getBearing(current.lat, current.lon, nextPt.lat, nextPt.lon)
+            : map.getBearing();
 
-        map.jumpTo({
-          center: [current.lon, current.lat],
-          zoom: 13.8,      // 緊湊特寫
-          pitch: 62,       // 3D 傾斜視角
-          bearing: bearing // 鏡頭對齊前進方向
-        });
-      } else {
-        // 全景靜態俯瞰
-        if (fullBounds) {
-          map.fitBounds(fullBounds, { padding: 40, duration: 0 });
-          map.setPitch(0);
-          map.setBearing(0);
+          map.jumpTo({
+            center: [current.lon, current.lat],
+            zoom: 13.5,
+            pitch: 60,
+            bearing: bearing
+          });
+        } else {
+          if (fullBounds) {
+            map.fitBounds(fullBounds, { padding: 30, duration: 0 });
+            map.setPitch(0);
+            map.setBearing(0);
+          }
         }
+
+        const activeCoords = trackPoints.slice(0, idx + 1).map(p => [p.lon, p.lat]);
+        if (map.getSource('active-route')) {
+          map.getSource('active-route').setData({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: activeCoords }
+          });
+        }
+        if (map.getSource('point-cursor')) {
+          map.getSource('point-cursor').setData({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [current.lon, current.lat] }
+          });
+        }
+      } catch (err) {
+        // 忽略邊界過載例外
       }
 
-      // 2. 繪製動態軌跡
-      const activeCoords = trackPoints.slice(0, idx + 1).map(p => [p.lon, p.lat]);
-      if (map.getSource('active-route')) {
-        map.getSource('active-route').setData({
-          type: 'Feature',
-          geometry: { type: 'LineString', coordinates: activeCoords }
-        });
-      }
-      if (map.getSource('point-cursor')) {
-        map.getSource('point-cursor').setData({
-          type: 'Feature',
-          geometry: { type: 'Point', coordinates: [current.lon, current.lat] }
-        });
-      }
-
-      // 3. 更新 HUD 數據
+      // 更新 HUD
       const totalDist = trackPoints[trackPoints.length - 1].dist || 1;
       const pct = Math.min(100, Math.round((current.dist / totalDist) * 100));
       document.getElementById('hudDist').innerText = `${current.dist.toFixed(1)} km`;
       document.getElementById('hudPct').innerText = `/ ${totalDist.toFixed(1)} km (${pct}%)`;
 
       if (startTimeEpoch && current.timestamp) {
-        const elapsedSec = (current.timestamp - startTimeEpoch) / 1000;
+        const elapsedSec = Math.max(0, (current.timestamp - startTimeEpoch) / 1000);
         document.getElementById('hudTime').innerText = `時間: ${formatDuration(elapsedSec)}`;
       }
 
@@ -412,40 +415,38 @@
       document.getElementById('boxCad').style.display = document.getElementById('showCad').checked ? 'block' : 'none';
     }
 
-    // 動畫核心控制器
+    // 穩固的定時器播放機制（保證順暢前進、滑桿連動）
     function runAnimation(onFinish) {
-      if (isPlaying) return;
+      if (isPlaying) stopAnimation();
       isPlaying = true;
       document.getElementById('btnPlay').innerText = '停止預覽';
 
-      const duration = parseInt(document.getElementById('durationSlider').value, 10) * 1000;
-      const start = performance.now();
-      const total = trackPoints.length;
+      const durationSec = parseInt(document.getElementById('durationSlider').value, 10);
+      const fps = 30;
+      const totalFrames = durationSec * fps;
+      const totalPoints = trackPoints.length;
+      let frame = 0;
 
-      function step(now) {
-        if (!isPlaying) return;
-        const elapsed = now - start;
-        const progress = Math.min(elapsed / duration, 1);
-        const idx = Math.floor(progress * (total - 1));
+      animTimer = setInterval(() => {
+        frame++;
+        const progress = Math.min(frame / totalFrames, 1);
+        const idx = Math.min(totalPoints - 1, Math.floor(progress * (totalPoints - 1)));
 
         scrubber.value = Math.floor(progress * 1000);
-        scrubberTxt.innerText = `${(progress * 100).toFixed(0)}%`;
+        scrubberTxt.innerText = `${Math.round(progress * 100)}%`;
 
         updateFrame(idx);
 
-        if (progress < 1) {
-          animFrame = requestAnimationFrame(step);
-        } else {
+        if (frame >= totalFrames) {
           stopAnimation();
           if (onFinish) onFinish();
         }
-      }
-      animFrame = requestAnimationFrame(step);
+      }, 1000 / fps);
     }
 
     function stopAnimation() {
       isPlaying = false;
-      if (animFrame) cancelAnimationFrame(animFrame);
+      if (animTimer) clearInterval(animTimer);
       document.getElementById('btnPlay').innerText = '播放預覽';
     }
 
@@ -454,112 +455,67 @@
       else runAnimation();
     });
 
-    // 完整畫面合成錄影引擎（解決黑屏與缺字問題）
-    document.getElementById('btnRecord').addEventListener('click', function() {
+    // 螢幕與音視訊捕捉匯出（解決跨域問題）
+    document.getElementById('btnRecord').addEventListener('click', async function() {
       const btn = this;
-      btn.disabled = true;
-      btn.innerText = '錄製中...請稍候';
+      if (isPlaying) stopAnimation();
 
-      const recCanvas = document.getElementById('recorderCanvas');
-      const recCtx = recCanvas.getContext('2d');
-      const mapCanvas = map.getCanvas();
+      try {
+        btn.disabled = true;
+        btn.innerText = '請在彈窗選擇「這個分頁」...';
 
-      // 監聽每影格並將地圖 + HUD 合成到 recCanvas
-      function composeFrame() {
-        // 1. 繪製當前 3D 地圖畫面
-        recCtx.drawImage(mapCanvas, 0, 0, recCanvas.width, recCanvas.height);
+        // 使用瀏覽器原生分頁螢幕錄影 API（100% 繞過跨域限制，並完整錄下地圖 + HUD）
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: 30 },
+          audio: false
+        });
 
-        // 2. 疊加頂部 HUD
-        const showDist = document.getElementById('showDist').checked;
-        const showTime = document.getElementById('showTime').checked;
-        if (showDist || showTime) {
-          recCtx.fillStyle = 'rgba(18, 18, 18, 0.85)';
-          recCtx.roundRect(40, 40, recCanvas.width - 80, 100, 16);
-          recCtx.fill();
+        btn.innerText = '錄製中...請勿切換分頁';
+        const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+        const chunks = [];
 
-          recCtx.fillStyle = '#ffffff';
-          recCtx.font = 'bold 36px sans-serif';
-          recCtx.fillText(document.getElementById('hudDist').innerText, 60, 95);
+        recorder.ondataavailable = e => chunks.push(e.data);
+        recorder.onstop = () => {
+          stream.getTracks().forEach(track => track.stop());
+          const blob = new Blob(chunks, { type: 'video/webm' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `ride_story_${Date.now()}.webm`;
+          a.click();
+          btn.disabled = false;
+          btn.innerText = '錄製並下載 IG 限動 (WebM)';
+        };
 
-          recCtx.fillStyle = '#888888';
-          recCtx.font = '22px sans-serif';
-          recCtx.fillText(document.getElementById('hudPct').innerText, 240, 95);
+        recorder.start();
 
-          if (showTime) {
-            recCtx.fillStyle = '#fc5200';
-            recCtx.font = 'bold 20px sans-serif';
-            recCtx.fillText(document.getElementById('hudTime').innerText, 60, 126);
-          }
-        }
+        // 從頭播放
+        scrubber.value = 0;
+        runAnimation(() => {
+          recorder.stop();
+        });
 
-        // 3. 疊加底部 HUD 數據
-        const activeBoxes = [];
-        if (document.getElementById('showSpeed').checked) activeBoxes.push({ label: '時速', val: document.getElementById('valSpeed').innerText, unit: 'km/h' });
-        if (document.getElementById('showHR').checked) activeBoxes.push({ label: '心率', val: document.getElementById('valHR').innerText, unit: 'bpm' });
-        if (document.getElementById('showElev').checked) activeBoxes.push({ label: '海拔', val: document.getElementById('valElev').innerText, unit: 'm' });
-        if (document.getElementById('showCad').checked) activeBoxes.push({ label: '踏頻', val: document.getElementById('valCad').innerText, unit: 'rpm' });
-
-        if (activeBoxes.length > 0) {
-          const bY = recCanvas.height - 180;
-          const bW = (recCanvas.width - 80) / activeBoxes.length;
-
-          recCtx.fillStyle = 'rgba(18, 18, 18, 0.9)';
-          recCtx.roundRect(40, bY, recCanvas.width - 80, 110, 18);
-          recCtx.fill();
-
-          activeBoxes.forEach((item, i) => {
-            const ix = 60 + (i * bW);
-            recCtx.fillStyle = '#888888';
-            recCtx.font = 'bold 18px sans-serif';
-            recCtx.fillText(item.label, ix, bY + 36);
-
-            recCtx.fillStyle = '#ffffff';
-            recCtx.font = 'bold 34px sans-serif';
-            recCtx.fillText(item.val, ix, bY + 82);
-
-            recCtx.fillStyle = '#aaaaaa';
-            recCtx.font = '16px sans-serif';
-            recCtx.fillText(item.unit, ix + (item.val.length * 20) + 4, bY + 82);
-          });
-        }
-      }
-
-      // 建立錄影串流
-      const stream = recCanvas.captureStream(30);
-      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
-      const chunks = [];
-
-      recorder.ondataavailable = e => chunks.push(e.data);
-      recorder.onstop = () => {
-        const blob = new Blob(chunks, { type: 'video/webm' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `ride_story_${Date.now()}.webm`;
-        a.click();
+      } catch (err) {
+        alert('錄製取消或未取得螢幕分享權限');
         btn.disabled = false;
         btn.innerText = '錄製並下載 IG 限動 (WebM)';
-      };
-
-      recorder.start();
-
-      // 在動畫執行時同步觸發畫面合成
-      const syncInterval = setInterval(composeFrame, 1000 / 30);
-
-      runAnimation(() => {
-        clearInterval(syncInterval);
-        recorder.stop();
-      });
+      }
     });
 
     document.querySelectorAll('.checkbox-group input').forEach(box => {
       box.addEventListener('change', () => {
-        if (trackPoints.length) updateFrame(Math.floor((parseFloat(scrubber.value) / 1000) * (trackPoints.length - 1)));
+        if (trackPoints.length) {
+          const val = Math.max(0, Math.min(1000, parseInt(scrubber.value, 10)));
+          updateFrame(Math.floor((val / 1000) * (trackPoints.length - 1)));
+        }
       });
     });
 
     cameraModeSelect.addEventListener('change', () => {
-      if (trackPoints.length) updateFrame(Math.floor((parseFloat(scrubber.value) / 1000) * (trackPoints.length - 1)));
+      if (trackPoints.length) {
+        const val = Math.max(0, Math.min(1000, parseInt(scrubber.value, 10)));
+        updateFrame(Math.floor((val / 1000) * (trackPoints.length - 1)));
+      }
     });
 
     document.getElementById('durationSlider').addEventListener('input', e => {
