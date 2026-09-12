@@ -7,7 +7,7 @@
   <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
   <style>
     body {
-      margin: 0; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang TC", "Microsoft JhengHei", sans-serif;
       background: #121212; color: #fff; display: flex; gap: 24px;
     }
     .panel { width: 340px; display: flex; flex-direction: column; gap: 14px; }
@@ -30,22 +30,25 @@
     .hud-overlay {
       position: absolute; top: 0; left: 0; width: 100%; height: 100%;
       pointer-events: none; display: flex; flex-direction: column; justify-content: space-between;
-      padding: 20px; box-sizing: border-box; z-index: 10;
+      padding: 16px; box-sizing: border-box; z-index: 10;
     }
     .hud-top {
       background: rgba(18, 18, 18, 0.85); backdrop-filter: blur(8px);
-      padding: 12px 16px; border-radius: 12px; display: flex; align-items: baseline; gap: 8px;
+      padding: 12px 16px; border-radius: 12px; display: flex; flex-direction: column; gap: 4px;
     }
+    .hud-top-line { display: flex; align-items: baseline; gap: 8px; }
     .hud-top .dist { font-size: 24px; font-weight: bold; color: #fff; }
     .hud-top .pct { font-size: 14px; color: #888; }
+    .hud-top .time { font-size: 13px; color: #fc5200; font-weight: bold; }
     
     .hud-bottom {
       background: rgba(18, 18, 18, 0.85); backdrop-filter: blur(8px);
-      padding: 12px; border-radius: 14px; display: flex; justify-content: space-around; text-align: center;
+      padding: 12px 6px; border-radius: 14px; display: flex; justify-content: space-around; text-align: center;
     }
-    .hud-stat-box .title { font-size: 11px; color: #888; font-weight: bold; }
-    .hud-stat-box .num { font-size: 22px; font-weight: bold; color: #fff; }
-    .hud-stat-box .unit { font-size: 11px; color: #aaa; margin-left: 2px; }
+    .hud-stat-box { flex: 1; }
+    .hud-stat-box .title { font-size: 11px; color: #888; font-weight: bold; margin-bottom: 2px; }
+    .hud-stat-box .num { font-size: 20px; font-weight: bold; color: #fff; }
+    .hud-stat-box .unit { font-size: 10px; color: #aaa; margin-left: 1px; }
   </style>
 </head>
 <body>
@@ -59,13 +62,14 @@
 
     <div class="control-group checkbox-group">
       <label>2. 自訂 HUD 儀表顯示</label>
-      <label><input type="checkbox" id="showSpeed" checked> 即時時速 (Speed)</label>
-      <label><input type="checkbox" id="showHR" checked> 即時心率 (Heart Rate)</label>
-      <label><input type="checkbox" id="showElevation" checked> 當前海拔 (Altitude)</label>
-      <label><input type="checkbox" id="showProgress" checked> 總里程與進度</label>
+      <label><input type="checkbox" id="showSpeed" checked> 即時時速 (km/h)</label>
+      <label><input type="checkbox" id="showHR" checked> 即時心率 (bpm)</label>
+      <label><input type="checkbox" id="showElev" checked> 海拔高度 (m)</label>
+      <label><input type="checkbox" id="showCad" checked> 踩踏踏頻 (rpm)</label>
+      <label><input type="checkbox" id="showDist" checked> 累積里程與完成度</label>
+      <label><input type="checkbox" id="showTime" checked> 已騎乘時間</label>
     </div>
 
-    <!-- 新增：0~100% 互動進度控制條 -->
     <div class="control-group">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
         <label style="margin:0;">3. 軌跡進度控制</label>
@@ -75,7 +79,7 @@
     </div>
 
     <div class="control-group">
-      <label>4. 影片播放長度: <span id="durationVal">15</span> 秒</label>
+      <label>4. 影片長度: <span id="durationVal">15</span> 秒</label>
       <input type="range" id="durationSlider" min="5" max="60" value="15" />
     </div>
 
@@ -90,21 +94,28 @@
     <div id="map"></div>
     <div class="hud-overlay" id="hudContainer">
       <div class="hud-top" id="topHud">
-        <span class="dist" id="hudDist">0.0 km</span>
-        <span class="pct" id="hudPct">/ 0.0 km (0%)</span>
+        <div class="hud-top-line" id="distLine">
+          <span class="dist" id="hudDist">0.0 km</span>
+          <span class="pct" id="hudPct">/ 0.0 km (0%)</span>
+        </div>
+        <div class="time" id="hudTime" style="display:none;">時間: 00:00:00</div>
       </div>
       <div class="hud-bottom" id="bottomHud">
         <div class="hud-stat-box" id="boxSpeed">
-          <div class="title">SPEED</div>
+          <div class="title">時速</div>
           <span class="num" id="valSpeed">0</span><span class="unit">km/h</span>
         </div>
         <div class="hud-stat-box" id="boxHR">
-          <div class="title">HEART RATE</div>
+          <div class="title">心率</div>
           <span class="num" id="valHR">--</span><span class="unit">bpm</span>
         </div>
         <div class="hud-stat-box" id="boxElev">
-          <div class="title">ELEVATION</div>
+          <div class="title">海拔</div>
           <span class="num" id="valElev">0</span><span class="unit">m</span>
+        </div>
+        <div class="hud-stat-box" id="boxCad">
+          <div class="title">踏頻</div>
+          <span class="num" id="valCad">--</span><span class="unit">rpm</span>
         </div>
       </div>
     </div>
@@ -114,6 +125,7 @@
     let trackPoints = [];
     let isPlaying = false;
     let animFrame = null;
+    let startTimeEpoch = 0;
 
     const satelliteStyle = {
       version: 8,
@@ -193,7 +205,8 @@
         const raw = parseTCX(evt.target.result);
         if (raw.length > 0) {
           trackPoints = downsample(raw, 1200);
-          document.getElementById('status').innerText = `已解析 ${trackPoints.length} 個點位`;
+          startTimeEpoch = trackPoints[0].timestamp;
+          document.getElementById('status').innerText = `已成功載入 ${trackPoints.length} 個點位`;
           
           document.getElementById('btnPlay').disabled = false;
           document.getElementById('btnRecord').disabled = false;
@@ -202,7 +215,6 @@
           scrubberTxt.innerText = "0%";
 
           const coords = trackPoints.map(p => [p.lon, p.lat]);
-          
           if (map.getSource('full-route')) {
             map.getSource('full-route').setData({
               type: 'Feature',
@@ -219,7 +231,6 @@
       reader.readAsText(file);
     });
 
-    // 監聽手動拖拉進度條
     scrubber.addEventListener('input', function(e) {
       if (trackPoints.length === 0) return;
       if (isPlaying) {
@@ -241,35 +252,60 @@
       return res;
     }
 
+    // 精確解析 TCX 原生 Garmin 速度、踏頻與時間
     function parseTCX(xmlStr) {
       const xml = new DOMParser().parseFromString(xmlStr, "application/xml");
       const nodes = xml.getElementsByTagName("Trackpoint");
       const list = [];
-      let total = 0;
+      let totalDist = 0;
 
       for (let i = 0; i < nodes.length; i++) {
-        const lat = nodes[i].getElementsByTagName("LatitudeDegrees")[0];
-        const lon = nodes[i].getElementsByTagName("LongitudeDegrees")[0];
-        const alt = nodes[i].getElementsByTagName("AltitudeMeters")[0];
-        const hr = nodes[i].getElementsByTagName("HeartRateBpm")[0];
+        const tp = nodes[i];
+        const lat = tp.getElementsByTagName("LatitudeDegrees")[0];
+        const lon = tp.getElementsByTagName("LongitudeDegrees")[0];
+        const alt = tp.getElementsByTagName("AltitudeMeters")[0];
+        const hr = tp.getElementsByTagName("HeartRateBpm")[0];
+        const cad = tp.getElementsByTagName("Cadence")[0];
+        const time = tp.getElementsByTagName("Time")[0];
+        const distNode = tp.getElementsByTagName("DistanceMeters")[0];
+
+        // 讀取 Garmin 專屬速度延伸標籤 (ns3:Speed, 單位為 m/s)
+        let speedVal = 0;
+        const speedNode = tp.getElementsByTagName("Speed")[0] || tp.getElementsByTagName("ns3:Speed")[0];
+        if (speedNode) {
+          speedVal = parseFloat(speedNode.textContent) * 3.6; // 換算成 km/h
+        }
 
         if (lat && lon) {
-          const pt = {
-            lat: parseFloat(lat.textContent),
-            lon: parseFloat(lon.textContent),
+          const timestamp = time ? new Date(time.textContent).getTime() : 0;
+          const currentLat = parseFloat(lat.textContent);
+          const currentLon = parseFloat(lon.textContent);
+          
+          if (distNode) {
+            totalDist = parseFloat(distNode.textContent) / 1000; // 公里
+          } else if (list.length > 0) {
+            const prev = list[list.length - 1];
+            totalDist += getDistKm(prev.lat, prev.lon, currentLat, currentLon);
+          }
+
+          // 若 XML 無 Speed 標籤，則利用前後點真實時間差與距離換算
+          if (!speedNode && list.length > 0) {
+            const prev = list[list.length - 1];
+            const dt = (timestamp - prev.timestamp) / 1000;
+            const ds = getDistKm(prev.lat, prev.lon, currentLat, currentLon);
+            speedVal = (dt > 0) ? (ds / dt) * 3600 : 0;
+          }
+
+          list.push({
+            lat: currentLat,
+            lon: currentLon,
             alt: alt ? Math.round(parseFloat(alt.textContent)) : 0,
             hr: hr ? parseInt(hr.querySelector("Value").textContent, 10) : 0,
-            dist: 0,
-            speed: 0
-          };
-          if (list.length > 0) {
-            const prev = list[list.length - 1];
-            const d = getDistKm(prev.lat, prev.lon, pt.lat, pt.lon);
-            total += d;
-            pt.dist = total;
-            pt.speed = Math.min(99, Math.round(d * 3600));
-          }
-          list.push(pt);
+            cad: cad ? parseInt(cad.textContent, 10) : 0,
+            dist: totalDist,
+            speed: Math.min(85, Math.max(0, Math.round(speedVal))), // 正常單車速度過濾
+            timestamp: timestamp
+          });
         }
       }
       return list;
@@ -281,6 +317,13 @@
       const dLon = (lon2 - lon1) * Math.PI / 180;
       const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
       return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    function formatDuration(sec) {
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = Math.floor(sec % 60);
+      return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     }
 
     function updateFrame(idx) {
@@ -301,23 +344,44 @@
         });
       }
 
-      // HUD 數據連動
+      // 里程與進度
       const totalDist = trackPoints[trackPoints.length - 1].dist || 1;
       const pct = Math.min(100, Math.round((current.dist / totalDist) * 100));
-
       document.getElementById('hudDist').innerText = `${current.dist.toFixed(1)} km`;
       document.getElementById('hudPct').innerText = `/ ${totalDist.toFixed(1)} km (${pct}%)`;
 
+      // 經過時間
+      if (startTimeEpoch && current.timestamp) {
+        const elapsedSec = (current.timestamp - startTimeEpoch) / 1000;
+        document.getElementById('hudTime').innerText = `時間: ${formatDuration(elapsedSec)}`;
+      }
+
+      // 底部數據卡片
       document.getElementById('valSpeed').innerText = current.speed;
       document.getElementById('valHR').innerText = current.hr || '--';
       document.getElementById('valHR').style.color = (current.hr > 165) ? '#ff4d4f' : '#fff';
       document.getElementById('valElev').innerText = current.alt;
+      document.getElementById('valCad').innerText = current.cad || '--';
 
-      document.getElementById('topHud').style.display = document.getElementById('showProgress').checked ? 'flex' : 'none';
+      // 依勾選狀態顯隱
+      const showDist = document.getElementById('showDist').checked;
+      const showTime = document.getElementById('showTime').checked;
+      document.getElementById('topHud').style.display = (showDist || showTime) ? 'flex' : 'none';
+      document.getElementById('distLine').style.display = showDist ? 'flex' : 'none';
+      document.getElementById('hudTime').style.display = showTime ? 'block' : 'none';
+
       document.getElementById('boxSpeed').style.display = document.getElementById('showSpeed').checked ? 'block' : 'none';
       document.getElementById('boxHR').style.display = document.getElementById('showHR').checked ? 'block' : 'none';
-      document.getElementById('boxElev').style.display = document.getElementById('showElevation').checked ? 'block' : 'none';
+      document.getElementById('boxElev').style.display = document.getElementById('showElev').checked ? 'block' : 'none';
+      document.getElementById('boxCad').style.display = document.getElementById('showCad').checked ? 'block' : 'none';
     }
+
+    // 勾選變更即刻同步畫面
+    document.querySelectorAll('.checkbox-group input').forEach(box => {
+      box.addEventListener('change', () => {
+        if (trackPoints.length) updateFrame(Math.floor((parseFloat(scrubber.value) / 1000) * (trackPoints.length - 1)));
+      });
+    });
 
     function runAnimation(onFinish) {
       if (isPlaying) return;
@@ -331,7 +395,6 @@
         const progress = Math.min(elapsed / duration, 1);
         const idx = Math.floor(progress * (total - 1));
 
-        // 同步拉桿位置與百分比
         scrubber.value = Math.floor(progress * 1000);
         scrubberTxt.innerText = `${(progress * 100).toFixed(0)}%`;
 
