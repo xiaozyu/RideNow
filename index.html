@@ -63,7 +63,6 @@
     }
     #minimapCanvas { width: 100%; height: 100%; display: block; }
 
-    /* 藍點標籤 */
     .rest-marker-container {
       display: flex; align-items: center; pointer-events: auto; cursor: pointer;
       transform: translate(-6px, -6px);
@@ -81,14 +80,12 @@
       background: #00ffff; color: #000;
     }
 
-    /* 街景彈窗最外層 */
     #streetviewModal {
       display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
       background: #000; z-index: 500;
     }
     #svFrame { width: 100%; height: 100%; border: none; position: absolute; top: 0; left: 0; z-index: 501; }
     
-    /* 街景頂部控制列 (強制浮在 iframe 上層) */
     .sv-navbar {
       position: absolute; top: 12px; left: 12px; right: 12px;
       display: flex; justify-content: space-between; align-items: center;
@@ -107,7 +104,6 @@
       border-radius: 6px; font-size: 12px; font-weight: bold; cursor: pointer;
     }
 
-    /* 街景左上角醒目大字 (強制浮在 iframe 上層) */
     .sv-city-label {
       position: absolute; top: 68px; left: 16px; z-index: 9999;
       font-size: 32px; font-weight: 900; color: #ff3b30;
@@ -116,7 +112,6 @@
       letter-spacing: 2px; pointer-events: none;
     }
 
-    /* 街景右上角雷達圖 (強制浮在 iframe 上層) */
     .sv-minimap-card {
       position: absolute; top: 68px; right: 16px; z-index: 9999;
       width: 76px; height: 124px; background: rgba(18, 18, 18, 0.9);
@@ -181,7 +176,6 @@
   <div id="render-container">
     <div id="map"></div>
 
-    <!-- 街景視窗 (元素已設為頂層 z-index: 9999) -->
     <div id="streetviewModal">
       <div class="sv-navbar">
         <div class="sv-title" id="svInfoTitle">休息站街景</div>
@@ -351,7 +345,6 @@
         };
       }
 
-      // 全路徑灰線
       svMiniCtx.beginPath();
       svMiniCtx.strokeStyle = '#555';
       svMiniCtx.lineWidth = 3;
@@ -364,7 +357,6 @@
       });
       svMiniCtx.stroke();
 
-      // 當前休息點高亮紅點
       const ptPos = toPos(restPoint);
       svMiniCtx.beginPath();
       svMiniCtx.arc(ptPos.x, ptPos.y, 6, 0, Math.PI * 2);
@@ -391,7 +383,6 @@
       modal.style.display = 'block';
       frame.src = `https://maps.google.com/maps?q=&layer=c&cbll=${r.lat},${r.lon}&cbp=11,0,0,0,0&output=svembed`;
       
-      // 延遲繪製確保 Canvas 渲染上下文準備就緒
       setTimeout(() => {
         drawStreetviewMinimap(r);
       }, 50);
@@ -903,7 +894,7 @@
       else runAnimation();
     });
 
-    // 專屬 9:16 純淨輸出
+    // 專屬 9:16 純淨輸出（徹底修復黑塊問題）
     document.getElementById('btnRecord').addEventListener('click', function() {
       const btn = this;
       btn.disabled = true;
@@ -916,6 +907,7 @@
       function composeFrame() {
         recCtx.drawImage(mapCanvas, 0, 0, recCanvas.width, recCanvas.height);
 
+        // 1. 繪製休息站標籤至影片（加入防黑塊邏輯）
         if (document.getElementById('showRestMarkers').checked) {
           const currentProgress = parseFloat(scrubber.value) / 1000;
           const currentIdx = Math.min(trackPoints.length - 1, Math.floor(currentProgress * trackPoints.length));
@@ -927,6 +919,7 @@
             const sx = (p.x / map.getContainer().clientWidth) * recCanvas.width;
             const sy = (p.y / map.getContainer().clientHeight) * recCanvas.height;
 
+            // 休息藍點
             recCtx.beginPath();
             recCtx.arc(sx, sy, 8, 0, Math.PI * 2);
             recCtx.fillStyle = '#00ffff';
@@ -936,31 +929,42 @@
             recCtx.stroke();
 
             const txt = `${r.order}次 ${formatMinOnly(r.durationSec)} / ${formatClockTime(r.accumRestSec)}`;
-            recCtx.font = 'bold 20px sans-serif';
+            
+            // 設定高相容標準字型
+            recCtx.font = 'bold 20px -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif';
+            recCtx.textBaseline = 'middle';
             const tw = recCtx.measureText(txt).width;
 
-            recCtx.fillStyle = 'rgba(5, 17, 30, 0.9)';
-            recCtx.strokeStyle = '#00ffff';
-            recCtx.lineWidth = 1.5;
-            recCtx.roundRect(sx + 14, sy - 18, tw + 18, 36, 6);
-            recCtx.fill();
-            recCtx.stroke();
+            // 只有文字長度有效時才繪製背景底框，防止空字串黑塊
+            if (tw > 0) {
+              recCtx.fillStyle = 'rgba(5, 17, 30, 0.88)';
+              recCtx.strokeStyle = '#00ffff';
+              recCtx.lineWidth = 1.5;
+              recCtx.beginPath();
+              recCtx.roundRect(sx + 14, sy - 18, tw + 18, 36, 6);
+              recCtx.fill();
+              recCtx.stroke();
 
-            recCtx.fillStyle = '#ffffff';
-            recCtx.fillText(txt, sx + 23, sy + 7);
+              // 亮白文字 + 陰影確保絕對可見
+              recCtx.fillStyle = '#ffffff';
+              recCtx.fillText(txt, sx + 23, sy);
+            }
           });
         }
 
+        // 2. 頂部 HUD
         const showDist = document.getElementById('showDist').checked;
         const showTime = document.getElementById('showTime').checked;
         if (showDist || showTime) {
           recCtx.fillStyle = 'rgba(18, 18, 18, 0.88)';
+          recCtx.beginPath();
           recCtx.roundRect(32, 32, 420, 120, 16);
           recCtx.fill();
 
           if (showDist) {
             recCtx.fillStyle = '#ffffff';
             recCtx.font = 'bold 36px sans-serif';
+            recCtx.textBaseline = 'alphabetic';
             recCtx.fillText(document.getElementById('hudDist').innerText, 50, 78);
 
             recCtx.fillStyle = '#888888';
@@ -985,13 +989,16 @@
           }
         }
 
+        // 3. 右上角縮圖
         if (document.getElementById('showMinimap').checked) {
           recCtx.fillStyle = 'rgba(18, 18, 18, 0.88)';
+          recCtx.beginPath();
           recCtx.roundRect(recCanvas.width - 180, 32, 148, 250, 14);
           recCtx.fill();
           recCtx.drawImage(miniCanvas, recCanvas.width - 180, 32, 148, 250);
         }
 
+        // 4. 底部數據
         const activeBoxes = [];
         if (document.getElementById('showAvgSpeed').checked) activeBoxes.push({ label: '均速', val: document.getElementById('valAvgSpeed').innerText, unit: 'km/h' });
         if (document.getElementById('showAvgHR').checked) activeBoxes.push({ label: '平均心率', val: document.getElementById('valAvgHR').innerText, unit: 'bpm' });
@@ -1003,6 +1010,7 @@
           const bW = (recCanvas.width - 64) / activeBoxes.length;
 
           recCtx.fillStyle = 'rgba(18, 18, 18, 0.9)';
+          recCtx.beginPath();
           recCtx.roundRect(32, bY, recCanvas.width - 64, 110, 18);
           recCtx.fill();
 
