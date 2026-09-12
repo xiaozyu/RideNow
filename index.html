@@ -54,6 +54,14 @@
     }
     #minimapCanvas { width: 100%; height: 100%; }
 
+    /* 浮動休息卡片 */
+    #restPopup {
+      position: absolute; background: rgba(10, 25, 45, 0.9); border: 1px solid #00ffff;
+      padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: bold;
+      color: #fff; display: none; transform: translate(-50%, -130%); white-space: nowrap;
+      box-shadow: 0 4px 12px rgba(0, 255, 255, 0.3); z-index: 20;
+    }
+
     .hud-bottom {
       background: rgba(18, 18, 18, 0.85); backdrop-filter: blur(8px);
       padding: 12px 6px; border-radius: 14px; display: flex; justify-content: space-around; text-align: center;
@@ -79,10 +87,9 @@
       <label>2. 自訂 HUD 數據指標</label>
       <label><input type="checkbox" id="showAvgSpeed" checked> 平均時速 (Avg Speed)</label>
       <label><input type="checkbox" id="showAvgHR" checked> 平均心率 (Avg HR)</label>
-      <label><input type="checkbox" id="showCurHR"> 即時心率 (Heart Rate)</label>
       <label><input type="checkbox" id="showAscent" checked> 累積爬升 (Ascent)</label>
-      <label><input type="checkbox" id="showElev"> 當前海拔 (Altitude)</label>
       <label><input type="checkbox" id="showRest" checked> 累計休息 (次數 / 時間)</label>
+      <label><input type="checkbox" id="showRestMarkers" checked> 地圖顯示休息站點標記</label>
       <label><input type="checkbox" id="showDist" checked> 累積里程與進度</label>
       <label><input type="checkbox" id="showTime" checked> 已騎乘時間</label>
       <label><input type="checkbox" id="showMinimap" checked> 右上角全島雷達圖</label>
@@ -110,6 +117,8 @@
 
   <div id="render-container">
     <div id="map"></div>
+    <div id="restPopup">休 0分 | 第 0次 (累計 0分)</div>
+
     <div class="hud-overlay" id="hudContainer">
       <div class="hud-top-bar">
         <div class="hud-top" id="topHud">
@@ -136,17 +145,9 @@
           <div class="title">平均心率</div>
           <span class="num" id="valAvgHR">--</span><span class="unit">bpm</span>
         </div>
-        <div class="hud-stat-box" id="boxCurHR" style="display:none;">
-          <div class="title">心率</div>
-          <span class="num" id="valCurHR">--</span><span class="unit">bpm</span>
-        </div>
         <div class="hud-stat-box" id="boxAscent">
           <div class="title">總爬升</div>
           <span class="num" id="valAscent">0</span><span class="unit">m</span>
-        </div>
-        <div class="hud-stat-box" id="boxElev" style="display:none;">
-          <div class="title">海拔</div>
-          <span class="num" id="valElev">0</span><span class="unit">m</span>
         </div>
         <div class="hud-stat-box" id="boxRest">
           <div class="title">休息</div>
@@ -160,6 +161,7 @@
 
   <script>
     let trackPoints = [];
+    let restStops = []; // 獨立儲存所有休息站點
     let isPlaying = false;
     let animTimer = null;
     let startTimeEpoch = 0;
@@ -218,6 +220,23 @@
         paint: { 'line-color': '#fc5200', 'line-width': 4 }
       });
 
+      // 休息點圖層
+      map.addSource('rest-stops', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+      });
+      map.addLayer({
+        id: 'rest-stops-points',
+        type: 'circle',
+        source: 'rest-stops',
+        paint: {
+          'circle-radius': 5,
+          'circle-color': '#00ffff',
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#ffffff'
+        }
+      });
+
       map.addSource('point-cursor', {
         type: 'geojson',
         data: { type: 'Feature', geometry: { type: 'Point', coordinates: [0, 0] } }
@@ -241,6 +260,7 @@
     const scrubberTxt = document.getElementById('scrubberPercent');
     const miniCanvas = document.getElementById('minimapCanvas');
     const miniCtx = miniCanvas.getContext('2d');
+    const restPopup = document.getElementById('restPopup');
 
     document.getElementById('tcxInput').addEventListener('change', function(e) {
       const file = e.target.files[0];
@@ -248,14 +268,17 @@
 
       const reader = new FileReader();
       reader.onload = function(evt) {
-        const raw = parseTCXWithRestAnalysis(evt.target.result);
-        if (raw.length > 0) {
-          trackPoints = downsample(raw, 900);
+        const res = parseTCXWithRestPoints(evt.target.result);
+        rawPoints = res.points;
+        restStops = res.restList;
+
+        if (rawPoints.length > 0) {
+          trackPoints = downsample(rawPoints, 900);
           startTimeEpoch = trackPoints[0].timestamp;
           
-          const totalRestCount = trackPoints[trackPoints.length - 1].restCount;
-          const totalRestMin = Math.round(trackPoints[trackPoints.length - 1].restSec / 60);
-          document.getElementById('status').innerText = `已載入 ${trackPoints.length} 點 | 休息: ${totalRestCount} 次 (${totalRestMin} 分鐘)`;
+          const totalRestCount = restStops.length;
+          const totalRestMin = restStops.length > 0 ? Math.round(restStops[restStops.length - 1].accumRestSec / 60) : 0;
+          document.getElementById('status').innerText = `已載入 ${trackPoints.length} 點 | 休息: ${totalRestCount} 次 (總計 ${totalRestMin} 分鐘)`;
 
           let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
           trackPoints.forEach(p => {
@@ -308,11 +331,12 @@
       return res;
     }
 
-    // 核心解析器：解析均速、心率積分、累積爬升與自動休息分析
-    function parseTCXWithRestAnalysis(xmlStr) {
+    // 精確解析航點與獨立抽離休息站點資料
+    function parseTCXWithRestPoints(xmlStr) {
       const xml = new DOMParser().parseFromString(xmlStr, "application/xml");
       const nodes = xml.getElementsByTagName("Trackpoint");
-      const list = [];
+      const points = [];
+      const restList = [];
       
       let totalDist = 0;
       let totalAscent = 0;
@@ -322,6 +346,7 @@
       let restCount = 0;
       let totalRestSec = 0;
       let currentStopSec = 0;
+      let stopStartIdx = 0;
       let isResting = false;
 
       for (let i = 0; i < nodes.length; i++) {
@@ -343,29 +368,40 @@
           let dt = 0;
           let ds = 0;
 
-          if (list.length > 0) {
-            const prev = list[list.length - 1];
+          if (points.length > 0) {
+            const prev = points[points.length - 1];
             dt = Math.max(0, (timestamp - prev.timestamp) / 1000);
             ds = getDistKm(prev.lat, prev.lon, currentLat, currentLon);
             totalDist += ds;
 
-            // 爬升累加 (大於 0.8m 濾除微波噪聲)
             if (currentAlt > prev.alt && (currentAlt - prev.alt) > 0.8) {
               totalAscent += (currentAlt - prev.alt);
             }
 
-            // 休息判定：時速 < 3 km/h
             const instSpeed = (dt > 0) ? (ds / dt) * 3600 : 0;
             if (instSpeed < 3) {
               currentStopSec += dt;
-              if (currentStopSec >= 120 && !isResting) { // 靜止超過 2 分鐘，計為一次休息
+              if (currentStopSec >= 120 && !isResting) { // 停留超過 2 分鐘
                 isResting = true;
                 restCount++;
+                stopStartIdx = points.length;
               }
               if (isResting) {
                 totalRestSec += dt;
               }
             } else {
+              if (isResting) {
+                // 結束休息，記錄該站點
+                restList.push({
+                  index: stopStartIdx,
+                  lat: currentLat,
+                  lon: currentLon,
+                  dist: totalDist,
+                  order: restCount,
+                  durationSec: Math.round(currentStopSec),
+                  accumRestSec: Math.round(totalRestSec)
+                });
+              }
               currentStopSec = 0;
               isResting = false;
             }
@@ -376,12 +412,11 @@
             hrCount++;
           }
 
-          // 計算純移動時間下的平均時速
-          const totalElapsedSec = list.length > 0 ? (timestamp - list[0].timestamp) / 1000 : 0;
+          const totalElapsedSec = points.length > 0 ? (timestamp - points[0].timestamp) / 1000 : 0;
           const movingSec = Math.max(1, totalElapsedSec - totalRestSec);
           const avgSpeed = (totalDist / (movingSec / 3600));
 
-          list.push({
+          points.push({
             lat: currentLat,
             lon: currentLon,
             alt: Math.round(currentAlt),
@@ -396,7 +431,7 @@
           });
         }
       }
-      return list;
+      return { points, restList };
     }
 
     function getDistKm(lat1, lon1, lat2, lon2) {
@@ -428,6 +463,12 @@
       const m = Math.floor((sec % 3600) / 60);
       const s = Math.floor(sec % 60);
       return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    }
+
+    function formatMinSec(sec) {
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      return s > 0 ? `${m}分${s}秒` : `${m}分`;
     }
 
     function drawMinimap(idx) {
@@ -477,6 +518,8 @@
       miniCtx.stroke();
     }
 
+    let activeRestCardText = null;
+
     function updateFrame(idx) {
       if (!trackPoints.length || !isMapLoaded) return;
       const current = trackPoints[idx];
@@ -502,7 +545,47 @@
         });
       }
 
-      // 更新頂部 HUD
+      // 1. 動態更新已通過的休息點標記
+      const showRestMarkers = document.getElementById('showRestMarkers').checked;
+      const passedRestStops = restStops.filter(r => r.dist <= current.dist);
+
+      if (map.getSource('rest-stops')) {
+        map.getSource('rest-stops').setData({
+          type: 'FeatureCollection',
+          features: showRestMarkers ? passedRestStops.map(r => ({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [r.lon, r.lat] }
+          })) : []
+        });
+      }
+
+      // 2. 判斷是否正經過某個休息點（距離 < 1.2 km 內彈窗）
+      let nearRest = null;
+      for (let r of passedRestStops) {
+        if (Math.abs(current.dist - r.dist) < 1.2) {
+          nearRest = r;
+          break;
+        }
+      }
+
+      if (nearRest && showRestMarkers) {
+        const accumMin = Math.round(nearRest.accumRestSec / 60);
+        const curDurStr = formatMinSec(nearRest.durationSec);
+        activeRestCardText = `休 ${curDurStr} | 第 ${nearRest.order} 次 (累計 ${accumMin}分)`;
+        
+        restPopup.innerText = activeRestCardText;
+        restPopup.style.display = 'block';
+
+        // 轉換經緯度至當前畫面像素
+        const pixelPos = map.project([nearRest.lon, nearRest.lat]);
+        restPopup.style.left = `${pixelPos.x}px`;
+        restPopup.style.top = `${pixelPos.y}px`;
+      } else {
+        activeRestCardText = null;
+        restPopup.style.display = 'none';
+      }
+
+      // 3. 更新頂部 HUD
       const totalDist = trackPoints[trackPoints.length - 1].dist || 1;
       const pct = Math.min(100, Math.round((current.dist / totalDist) * 100));
       document.getElementById('hudDist').innerText = `${current.dist.toFixed(1)} km`;
@@ -514,13 +597,10 @@
         document.getElementById('hudTime').innerText = formatDuration(elapsedSec);
       }
 
-      // 更新底部各統計卡片
+      // 4. 更新底部統計卡片
       document.getElementById('valAvgSpeed').innerText = current.avgSpeed.toFixed(1);
       document.getElementById('valAvgHR').innerText = current.avgHR || '--';
-      document.getElementById('valCurHR').innerText = current.hr || '--';
-      document.getElementById('valCurHR').style.color = (current.hr > 165) ? '#ff4d4f' : '#fff';
       document.getElementById('valAscent').innerText = current.ascent;
-      document.getElementById('valElev').innerText = current.alt;
       
       document.getElementById('valRest').innerText = `${current.restCount}次`;
       const restMin = Math.round(current.restSec / 60);
@@ -536,9 +616,7 @@
 
       document.getElementById('boxAvgSpeed').style.display = document.getElementById('showAvgSpeed').checked ? 'block' : 'none';
       document.getElementById('boxAvgHR').style.display = document.getElementById('showAvgHR').checked ? 'block' : 'none';
-      document.getElementById('boxCurHR').style.display = document.getElementById('showCurHR').checked ? 'block' : 'none';
       document.getElementById('boxAscent').style.display = document.getElementById('showAscent').checked ? 'block' : 'none';
-      document.getElementById('boxElev').style.display = document.getElementById('showElev').checked ? 'block' : 'none';
       document.getElementById('boxRest').style.display = document.getElementById('showRest').checked ? 'block' : 'none';
 
       drawMinimap(idx);
@@ -583,7 +661,7 @@
       else runAnimation();
     });
 
-    // 專屬 9:16 純淨輸出
+    // 專屬 9:16 純淨輸出（同步繪製休息點與彈出卡）
     document.getElementById('btnRecord').addEventListener('click', function() {
       const btn = this;
       btn.disabled = true;
@@ -595,6 +673,27 @@
 
       function composeFrame() {
         recCtx.drawImage(mapCanvas, 0, 0, recCanvas.width, recCanvas.height);
+
+        // 疊加當前經過的休息彈窗卡片
+        if (activeRestCardText && document.getElementById('showRestMarkers').checked) {
+          const rect = restPopup.getBoundingClientRect();
+          const mapRect = document.getElementById('map').getBoundingClientRect();
+          const rx = ((rect.left - mapRect.left + rect.width / 2) / mapRect.width) * recCanvas.width;
+          const ry = ((rect.top - mapRect.top + rect.height / 2) / mapRect.height) * recCanvas.height;
+
+          recCtx.fillStyle = 'rgba(10, 25, 45, 0.95)';
+          recCtx.strokeStyle = '#00ffff';
+          recCtx.lineWidth = 2;
+          recCtx.roundRect(rx - 150, ry - 30, 300, 50, 10);
+          recCtx.fill();
+          recCtx.stroke();
+
+          recCtx.fillStyle = '#ffffff';
+          recCtx.font = 'bold 20px sans-serif';
+          recCtx.textAlign = 'center';
+          recCtx.fillText(activeRestCardText, rx, ry + 4);
+          recCtx.textAlign = 'left';
+        }
 
         const showDist = document.getElementById('showDist').checked;
         const showTime = document.getElementById('showTime').checked;
@@ -631,13 +730,10 @@
           recCtx.drawImage(miniCanvas, recCanvas.width - 180, 32, 148, 250);
         }
 
-        // 底部數據合成
         const activeBoxes = [];
         if (document.getElementById('showAvgSpeed').checked) activeBoxes.push({ label: '均速', val: document.getElementById('valAvgSpeed').innerText, unit: 'km/h' });
         if (document.getElementById('showAvgHR').checked) activeBoxes.push({ label: '平均心率', val: document.getElementById('valAvgHR').innerText, unit: 'bpm' });
-        if (document.getElementById('showCurHR').checked) activeBoxes.push({ label: '心率', val: document.getElementById('valCurHR').innerText, unit: 'bpm' });
         if (document.getElementById('showAscent').checked) activeBoxes.push({ label: '總爬升', val: document.getElementById('valAscent').innerText, unit: 'm' });
-        if (document.getElementById('showElev').checked) activeBoxes.push({ label: '海拔', val: document.getElementById('valElev').innerText, unit: 'm' });
         if (document.getElementById('showRest').checked) activeBoxes.push({ label: '休息', val: document.getElementById('valRest').innerText, unit: document.getElementById('valRestTime').innerText });
 
         if (activeBoxes.length > 0) {
