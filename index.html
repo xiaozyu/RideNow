@@ -80,7 +80,7 @@
       <label><input type="checkbox" id="showAvgHR" checked> 平均心率 (Avg HR)</label>
       <label><input type="checkbox" id="showAscent" checked> 累積爬升 (Ascent)</label>
       <label><input type="checkbox" id="showRest" checked> 累計休息 (次數 / 時間)</label>
-      <label><input type="checkbox" id="showRestMarkers" checked> 地圖顯示休息站點與時間</label>
+      <label><input type="checkbox" id="showRestMarkers" checked> 地圖顯示休息次數與時間</label>
       <label><input type="checkbox" id="showDist" checked> 累積里程與進度</label>
       <label><input type="checkbox" id="showTime" checked> 已騎乘時間</label>
       <label><input type="checkbox" id="showMinimap" checked> 右上角全島雷達圖</label>
@@ -210,7 +210,7 @@
         paint: { 'line-color': '#fc5200', 'line-width': 4 }
       });
 
-      // 休息點藍點圖層
+      // 休息站藍點
       map.addSource('rest-stops', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] }
@@ -220,14 +220,14 @@
         type: 'circle',
         source: 'rest-stops',
         paint: {
-          'circle-radius': 5,
+          'circle-radius': 6,
           'circle-color': '#00ffff',
           'circle-stroke-width': 2,
           'circle-stroke-color': '#ffffff'
         }
       });
 
-      // 休息站旁的常駐文字標籤圖層
+      // 休息文字：次數 本次時間 / 總累計時間
       map.addLayer({
         id: 'rest-stops-labels',
         type: 'symbol',
@@ -235,14 +235,14 @@
         layout: {
           'text-field': ['get', 'label'],
           'text-size': 11,
-          'text-offset': [0.8, 0],
+          'text-offset': [0.9, -0.2],
           'text-anchor': 'left',
           'text-allow-overlap': true
         },
         paint: {
           'text-color': '#ffffff',
-          'text-halo-color': '#0a192d',
-          'text-halo-width': 2
+          'text-halo-color': '#05111e',
+          'text-halo-width': 2.5
         }
       });
 
@@ -549,10 +549,16 @@
       return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     }
 
-    function formatMinSec(sec) {
-      const m = Math.floor(sec / 60);
-      const s = sec % 60;
-      return s > 0 ? `${m}分${s}秒` : `${m}分`;
+    // 將秒數轉換為 分 或 時:分 格式
+    function formatClockTime(sec) {
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      return `${h}:${m.toString().padStart(2, '0')}`;
+    }
+
+    function formatMinOnly(sec) {
+      const m = Math.round(sec / 60);
+      return `${m}分`;
     }
 
     function drawMinimap(idx) {
@@ -627,7 +633,7 @@
         });
       }
 
-      // 休息站與藍點旁常駐文字連動
+      // 休息站與「次數 本次時間 / 總累計時間」標籤渲染
       const showRestMarkers = document.getElementById('showRestMarkers').checked;
       const passedRestStops = restStops.filter(r => r.dist <= current.dist);
 
@@ -638,7 +644,7 @@
             type: 'Feature',
             geometry: { type: 'Point', coordinates: [r.lon, r.lat] },
             properties: {
-              label: `休 ${formatMinSec(r.durationSec)}`
+              label: `${r.order}次 ${formatMinOnly(r.durationSec)} / ${formatClockTime(r.accumRestSec)}`
             }
           })) : []
         });
