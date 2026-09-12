@@ -3,7 +3,6 @@
 <head>
   <meta charset="UTF-8">
   <title>RideNow - 單車動態視覺化</title>
-  <!-- 改用完全開源免金鑰的 MapLibre GL JS -->
   <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
   <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
   <style>
@@ -15,7 +14,7 @@
     .control-group { background: #1e1e1e; padding: 14px; border-radius: 8px; font-size: 14px; }
     .control-group label { display: block; margin-bottom: 6px; font-weight: bold; }
     .checkbox-group label { display: flex; align-items: center; gap: 8px; font-weight: normal; margin-bottom: 6px; cursor: pointer; }
-    input[type="range"] { width: 100%; }
+    input[type="range"] { width: 100%; accent-color: #fc5200; }
     button {
       background: #fc5200; color: #fff; border: none; padding: 10px 14px;
       border-radius: 6px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 6px;
@@ -66,13 +65,22 @@
       <label><input type="checkbox" id="showProgress" checked> 總里程與進度</label>
     </div>
 
+    <!-- 新增：0~100% 互動進度控制條 -->
     <div class="control-group">
-      <label>3. 動畫長度: <span id="durationVal">15</span> 秒</label>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <label style="margin:0;">3. 軌跡進度控制</label>
+        <span id="scrubberPercent" style="font-size:12px; color:#fc5200; font-weight:bold;">0%</span>
+      </div>
+      <input type="range" id="progressScrubber" min="0" max="1000" value="0" disabled />
+    </div>
+
+    <div class="control-group">
+      <label>4. 影片播放長度: <span id="durationVal">15</span> 秒</label>
       <input type="range" id="durationSlider" min="5" max="60" value="15" />
     </div>
 
     <div class="control-group">
-      <label>4. 操作控制</label>
+      <label>5. 操作控制</label>
       <button id="btnPlay" disabled>播放預覽</button>
       <button id="btnRecord" disabled style="background:#28a745;">錄製並下載 IG 限動 (WebM)</button>
     </div>
@@ -107,15 +115,12 @@
     let isPlaying = false;
     let animFrame = null;
 
-    // 免 Token 的 ESRI 實景衛星圖設定
     const satelliteStyle = {
       version: 8,
       sources: {
         'esri-tiles': {
           type: 'raster',
-          tiles: [
-            'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-          ],
+          tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
           tileSize: 256
         }
       },
@@ -137,7 +142,6 @@
     });
 
     map.on('load', () => {
-      // 軌跡全路徑底線
       map.addSource('full-route', {
         type: 'geojson',
         data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] } }
@@ -149,7 +153,6 @@
         paint: { 'line-color': '#000000', 'line-width': 5, 'line-opacity': 0.5 }
       });
 
-      // 動態橘色行進線
       map.addSource('active-route', {
         type: 'geojson',
         data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] } }
@@ -161,7 +164,6 @@
         paint: { 'line-color': '#fc5200', 'line-width': 4 }
       });
 
-      // 亮點游標
       map.addSource('point-cursor', {
         type: 'geojson',
         data: { type: 'Feature', geometry: { type: 'Point', coordinates: [0, 0] } }
@@ -179,6 +181,9 @@
       });
     });
 
+    const scrubber = document.getElementById('progressScrubber');
+    const scrubberTxt = document.getElementById('scrubberPercent');
+
     document.getElementById('tcxInput').addEventListener('change', function(e) {
       const file = e.target.files[0];
       if (!file) return;
@@ -189,8 +194,12 @@
         if (raw.length > 0) {
           trackPoints = downsample(raw, 1200);
           document.getElementById('status').innerText = `已解析 ${trackPoints.length} 個點位`;
+          
           document.getElementById('btnPlay').disabled = false;
           document.getElementById('btnRecord').disabled = false;
+          scrubber.disabled = false;
+          scrubber.value = 0;
+          scrubberTxt.innerText = "0%";
 
           const coords = trackPoints.map(p => [p.lon, p.lat]);
           
@@ -201,7 +210,6 @@
             });
           }
 
-          // 自動居中縮放路線
           const bounds = coords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
           map.fitBounds(bounds, { padding: 40, duration: 0 });
 
@@ -209,6 +217,19 @@
         }
       };
       reader.readAsText(file);
+    });
+
+    // 監聽手動拖拉進度條
+    scrubber.addEventListener('input', function(e) {
+      if (trackPoints.length === 0) return;
+      if (isPlaying) {
+        isPlaying = false;
+        cancelAnimationFrame(animFrame);
+      }
+      const progress = parseFloat(e.target.value) / 1000;
+      scrubberTxt.innerText = `${(progress * 100).toFixed(0)}%`;
+      const idx = Math.min(trackPoints.length - 1, Math.floor(progress * trackPoints.length));
+      updateFrame(idx);
     });
 
     function downsample(arr, max) {
@@ -280,7 +301,7 @@
         });
       }
 
-      // 數據面板更新
+      // HUD 數據連動
       const totalDist = trackPoints[trackPoints.length - 1].dist || 1;
       const pct = Math.min(100, Math.round((current.dist / totalDist) * 100));
 
@@ -310,6 +331,10 @@
         const progress = Math.min(elapsed / duration, 1);
         const idx = Math.floor(progress * (total - 1));
 
+        // 同步拉桿位置與百分比
+        scrubber.value = Math.floor(progress * 1000);
+        scrubberTxt.innerText = `${(progress * 100).toFixed(0)}%`;
+
         updateFrame(idx);
 
         if (progress < 1 && isPlaying) {
@@ -326,8 +351,9 @@
       if (isPlaying) {
         isPlaying = false;
         cancelAnimationFrame(animFrame);
+      } else {
+        runAnimation();
       }
-      runAnimation();
     });
 
     document.getElementById('btnRecord').addEventListener('click', function() {
