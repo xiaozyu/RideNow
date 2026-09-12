@@ -15,7 +15,8 @@
     .control-group { background: #1e1e1e; padding: 14px; border-radius: 8px; font-size: 14px; }
     .control-group label { display: block; margin-bottom: 6px; font-weight: bold; }
     .checkbox-group label { display: flex; align-items: center; gap: 8px; font-weight: normal; margin-bottom: 6px; cursor: pointer; }
-    input[type="range"] { width: 100%; accent-color: #fc5200; }
+    input[type="range"], select { width: 100%; accent-color: #fc5200; }
+    select { background: #2a2a2a; color: #fff; border: 1px solid #444; padding: 6px; border-radius: 4px; }
     button {
       background: #fc5200; color: #fff; border: none; padding: 10px 14px;
       border-radius: 6px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 6px;
@@ -150,7 +151,7 @@
       <label><input type="checkbox" id="showRestMarkers" checked> 地圖顯示休息標籤 (可點擊看街景)</label>
       <label><input type="checkbox" id="showDist" checked> 累積里程與進度條</label>
       <label><input type="checkbox" id="showTime" checked> 已騎乘時間</label>
-      <label><input type="checkbox" id="showMinimap" checked> 右上角全島路線縮圖</label>
+      <label><input type="checkbox" id="showMinimap" checked> 右上角路線縮圖</label>
     </div>
 
     <div class="control-group">
@@ -162,12 +163,22 @@
     </div>
 
     <div class="control-group">
-      <label>4. 影片長度: <span id="durationVal">15</span> 秒</label>
+      <label>4. 視角高度模式</label>
+      <select id="cameraProfile">
+        <option value="auto">智慧自動判斷（依路線長度自適應）</option>
+        <option value="close">特寫跟拍 (適合 < 20km 短程)</option>
+        <option value="mid">區域鳥瞰 (適合 20~100km 中程)</option>
+        <option value="far">高空遠景 (適合 > 100km 長程雙塔)</option>
+      </select>
+    </div>
+
+    <div class="control-group">
+      <label>5. 影片長度: <span id="durationVal">15</span> 秒</label>
       <input type="range" id="durationSlider" min="5" max="60" value="15" />
     </div>
 
     <div class="control-group">
-      <label>5. 操作控制</label>
+      <label>6. 操作控制</label>
       <button id="btnPlay" disabled>播放預覽</button>
       <button id="btnRecord" disabled style="background:#28a745;">一鍵匯出限動影片 (WebM)</button>
     </div>
@@ -186,7 +197,7 @@
         </div>
       </div>
       
-      <div class="sv-city-label" id="svCityLabel">台南市</div>
+      <div class="sv-city-label" id="svCityLabel">台中市</div>
       
       <div class="sv-minimap-card">
         <canvas id="svMinimapCanvas" width="152" height="248"></canvas>
@@ -248,6 +259,10 @@
     let startTimeEpoch = 0;
     let isMapLoaded = false;
     let miniBounds = null;
+
+    // 自適應相機參數
+    let activeCameraZoom = 9.2;
+    let activeCameraPitch = 45;
 
     const satelliteStyle = {
       version: 8,
@@ -406,6 +421,7 @@
     const miniCanvas = document.getElementById('minimapCanvas');
     const miniCtx = miniCanvas.getContext('2d');
     const progFill = document.getElementById('progFill');
+    const cameraProfileSelect = document.getElementById('cameraProfile');
 
     document.getElementById('fileInput').addEventListener('change', function(e) {
       const file = e.target.files[0];
@@ -471,6 +487,36 @@
       });
     }
 
+    // 計算自適應鏡頭高度與俯角
+    function evaluateCameraFraming(totalKm) {
+      const profile = cameraProfileSelect.value;
+      if (profile === 'close') {
+        activeCameraZoom = 14.0;
+        activeCameraPitch = 55;
+      } else if (profile === 'mid') {
+        activeCameraZoom = 11.2;
+        activeCameraPitch = 48;
+      } else if (profile === 'far') {
+        activeCameraZoom = 9.2;
+        activeCameraPitch = 40;
+      } else {
+        // 智慧自動邏輯
+        if (totalKm < 15) {
+          activeCameraZoom = 14.2; // 7.5km 這類小範圍短程，精確看清街道路段
+          activeCameraPitch = 55;
+        } else if (totalKm < 60) {
+          activeCameraZoom = 12.0; // 晨騎、中社路線
+          activeCameraPitch = 50;
+        } else if (totalKm < 150) {
+          activeCameraZoom = 10.5; // 經典百 K 挑戰賽
+          activeCameraPitch = 45;
+        } else {
+          activeCameraZoom = 9.0;  // 雙塔 520 等跨縣市長征
+          activeCameraPitch = 40;
+        }
+      }
+    }
+
     function applyProcessedData(raw, rests) {
       if (raw.length === 0) {
         document.getElementById('status').innerText = '檔案內無有效 GPS 航點。';
@@ -483,10 +529,12 @@
       activeRestMarkers.forEach(m => m.remove());
       activeRestMarkers = [];
 
+      const totalDist = trackPoints[trackPoints.length - 1].dist;
+      evaluateCameraFraming(totalDist);
+
       const totalRestCount = restStops.length;
-      const totalRestMin = restStops.length > 0 ? Math.round(restStops[restStops.length - 1].accumRestSec / 60) : 0;
       const totalAscent = trackPoints[trackPoints.length - 1].ascent;
-      document.getElementById('status').innerText = `已載入 ${trackPoints.length} 點 | 總爬升: ${totalAscent}m | 休息: ${totalRestCount} 次`;
+      document.getElementById('status').innerText = `已載入 ${trackPoints.length} 點 | 里程: ${totalDist.toFixed(1)}km | 爬升: ${totalAscent}m`;
 
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
       trackPoints.forEach(p => {
@@ -496,8 +544,8 @@
         if (p.lat > maxY) maxY = p.lat;
       });
 
-      const spanX = Math.max(maxX - minX, 0.01);
-      const spanY = Math.max(maxY - minY, 0.01);
+      const spanX = Math.max(maxX - minX, 0.005);
+      const spanY = Math.max(maxY - minY, 0.005);
       miniBounds = { minX, maxX, minY, maxY, spanX, spanY };
 
       document.getElementById('btnPlay').disabled = false;
@@ -532,6 +580,13 @@
       updateFrame(idx);
     });
 
+    cameraProfileSelect.addEventListener('change', () => {
+      if (trackPoints.length > 0) {
+        evaluateCameraFraming(trackPoints[trackPoints.length - 1].dist);
+        updateFrame(Math.min(trackPoints.length - 1, Math.floor((parseInt(scrubber.value, 10) / 1000) * trackPoints.length)));
+      }
+    });
+
     function downsample(arr, max) {
       if (arr.length <= max) return arr;
       const step = Math.ceil(arr.length / max);
@@ -541,7 +596,6 @@
       return res;
     }
 
-    // 核心修復：在原始完整點位上進行真實累計爬升運算（還原 1500m+ 爬升）
     function analyzePoints(rawList) {
       const points = [];
       const restList = [];
@@ -556,7 +610,6 @@
       let stopStartIdx = 0;
       let isResting = false;
 
-      // 建立滑動平均平滑海拔陣列，過濾氣壓計微抖動（窗口大小 5）
       const smoothedAlt = [];
       const windowSize = 5;
       for (let i = 0; i < rawList.length; i++) {
@@ -591,7 +644,6 @@
             totalDist += ds;
           }
 
-          // 真實微爬升累積：使用平滑後的氣壓高度，只要是正上升就真實累加
           const altDiff = smoothedAlt[i] - smoothedAlt[i - 1];
           if (altDiff > 0.05) {
             totalAscent += altDiff;
@@ -781,10 +833,11 @@
       if (!trackPoints.length || !isMapLoaded) return;
       const current = trackPoints[idx];
 
+      // 套用自適應高度與角度
       map.jumpTo({
         center: [current.lon, current.lat],
-        zoom: 9.2,
-        pitch: 45,
+        zoom: activeCameraZoom,
+        pitch: activeCameraPitch,
         bearing: 0
       });
 
@@ -910,7 +963,6 @@
       else runAnimation();
     });
 
-    // 專屬 9:16 純淨輸出（無黑塊、純淨渲染）
     document.getElementById('btnRecord').addEventListener('click', function() {
       const btn = this;
       btn.disabled = true;
@@ -923,7 +975,6 @@
       function composeFrame() {
         recCtx.drawImage(mapCanvas, 0, 0, recCanvas.width, recCanvas.height);
 
-        // 繪製休息站標籤至影片
         if (document.getElementById('showRestMarkers').checked) {
           const currentProgress = parseFloat(scrubber.value) / 1000;
           const currentIdx = Math.min(trackPoints.length - 1, Math.floor(currentProgress * trackPoints.length));
