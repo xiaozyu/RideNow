@@ -21,7 +21,6 @@
     }
     button:disabled { background: #555; cursor: not-allowed; }
 
-    /* 9:16 直式容器 */
     #render-container {
       position: relative; width: 360px; height: 640px;
       border-radius: 16px; overflow: hidden; background: #000; border: 2px solid #333;
@@ -48,7 +47,6 @@
     .hud-top .city { color: #fc5200; font-weight: bold; }
     .hud-top .time { color: #aaa; }
     
-    /* 右上角迷你雷達全圖 */
     .minimap-card {
       width: 76px; height: 128px; background: rgba(18, 18, 18, 0.85);
       backdrop-filter: blur(8px); border-radius: 10px; border: 1px solid #333;
@@ -60,12 +58,11 @@
       background: rgba(18, 18, 18, 0.85); backdrop-filter: blur(8px);
       padding: 12px 6px; border-radius: 14px; display: flex; justify-content: space-around; text-align: center;
     }
-    .hud-stat-box { flex: 1; }
+    .hud-stat-box { flex: 1; min-width: 0; }
     .hud-stat-box .title { font-size: 11px; color: #888; font-weight: bold; margin-bottom: 2px; }
-    .hud-stat-box .num { font-size: 20px; font-weight: bold; color: #fff; }
+    .hud-stat-box .num { font-size: 20px; font-weight: bold; color: #fff; white-space: nowrap; }
     .hud-stat-box .unit { font-size: 10px; color: #aaa; margin-left: 1px; }
 
-    /* 後台 9:16 純淨錄影畫布 */
     #recorderCanvas { display: none; }
   </style>
 </head>
@@ -79,11 +76,13 @@
     </div>
 
     <div class="control-group checkbox-group">
-      <label>2. 自訂 HUD 儀表顯示</label>
-      <label><input type="checkbox" id="showSpeed" checked> 即時時速 (km/h)</label>
-      <label><input type="checkbox" id="showHR" checked> 即時心率 (bpm)</label>
-      <label><input type="checkbox" id="showElev" checked> 海拔高度 (m)</label>
-      <label><input type="checkbox" id="showCad" checked> 踩踏踏頻 (rpm)</label>
+      <label>2. 自訂 HUD 數據指標</label>
+      <label><input type="checkbox" id="showAvgSpeed" checked> 平均時速 (Avg Speed)</label>
+      <label><input type="checkbox" id="showAvgHR" checked> 平均心率 (Avg HR)</label>
+      <label><input type="checkbox" id="showCurHR"> 即時心率 (Heart Rate)</label>
+      <label><input type="checkbox" id="showAscent" checked> 累積爬升 (Ascent)</label>
+      <label><input type="checkbox" id="showElev"> 當前海拔 (Altitude)</label>
+      <label><input type="checkbox" id="showRest" checked> 累計休息 (次數 / 時間)</label>
       <label><input type="checkbox" id="showDist" checked> 累積里程與進度</label>
       <label><input type="checkbox" id="showTime" checked> 已騎乘時間</label>
       <label><input type="checkbox" id="showMinimap" checked> 右上角全島雷達圖</label>
@@ -129,21 +128,29 @@
       </div>
 
       <div class="hud-bottom" id="bottomHud">
-        <div class="hud-stat-box" id="boxSpeed">
-          <div class="title">時速</div>
-          <span class="num" id="valSpeed">0</span><span class="unit">km/h</span>
+        <div class="hud-stat-box" id="boxAvgSpeed">
+          <div class="title">均速</div>
+          <span class="num" id="valAvgSpeed">0.0</span><span class="unit">km/h</span>
         </div>
-        <div class="hud-stat-box" id="boxHR">
+        <div class="hud-stat-box" id="boxAvgHR">
+          <div class="title">平均心率</div>
+          <span class="num" id="valAvgHR">--</span><span class="unit">bpm</span>
+        </div>
+        <div class="hud-stat-box" id="boxCurHR" style="display:none;">
           <div class="title">心率</div>
-          <span class="num" id="valHR">--</span><span class="unit">bpm</span>
+          <span class="num" id="valCurHR">--</span><span class="unit">bpm</span>
         </div>
-        <div class="hud-stat-box" id="boxElev">
+        <div class="hud-stat-box" id="boxAscent">
+          <div class="title">總爬升</div>
+          <span class="num" id="valAscent">0</span><span class="unit">m</span>
+        </div>
+        <div class="hud-stat-box" id="boxElev" style="display:none;">
           <div class="title">海拔</div>
           <span class="num" id="valElev">0</span><span class="unit">m</span>
         </div>
-        <div class="hud-stat-box" id="boxCad">
-          <div class="title">踏頻</div>
-          <span class="num" id="valCad">--</span><span class="unit">rpm</span>
+        <div class="hud-stat-box" id="boxRest">
+          <div class="title">休息</div>
+          <span class="num" id="valRest">0次</span><span class="unit" id="valRestTime">0分</span>
         </div>
       </div>
     </div>
@@ -241,13 +248,15 @@
 
       const reader = new FileReader();
       reader.onload = function(evt) {
-        const raw = parseTCX(evt.target.result);
+        const raw = parseTCXWithRestAnalysis(evt.target.result);
         if (raw.length > 0) {
           trackPoints = downsample(raw, 900);
           startTimeEpoch = trackPoints[0].timestamp;
-          document.getElementById('status').innerText = `已載入 ${trackPoints.length} 個點位`;
+          
+          const totalRestCount = trackPoints[trackPoints.length - 1].restCount;
+          const totalRestMin = Math.round(trackPoints[trackPoints.length - 1].restSec / 60);
+          document.getElementById('status').innerText = `已載入 ${trackPoints.length} 點 | 休息: ${totalRestCount} 次 (${totalRestMin} 分鐘)`;
 
-          // 計算全島雷達圖邊界
           let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
           trackPoints.forEach(p => {
             if (p.lon < minX) minX = p.lon;
@@ -299,11 +308,21 @@
       return res;
     }
 
-    function parseTCX(xmlStr) {
+    // 核心解析器：解析均速、心率積分、累積爬升與自動休息分析
+    function parseTCXWithRestAnalysis(xmlStr) {
       const xml = new DOMParser().parseFromString(xmlStr, "application/xml");
       const nodes = xml.getElementsByTagName("Trackpoint");
       const list = [];
+      
       let totalDist = 0;
+      let totalAscent = 0;
+      let hrSum = 0;
+      let hrCount = 0;
+
+      let restCount = 0;
+      let totalRestSec = 0;
+      let currentStopSec = 0;
+      let isResting = false;
 
       for (let i = 0; i < nodes.length; i++) {
         const tp = nodes[i];
@@ -311,42 +330,69 @@
         const lon = tp.getElementsByTagName("LongitudeDegrees")[0];
         const alt = tp.getElementsByTagName("AltitudeMeters")[0];
         const hr = tp.getElementsByTagName("HeartRateBpm")[0];
-        const cad = tp.getElementsByTagName("Cadence")[0];
         const time = tp.getElementsByTagName("Time")[0];
         const distNode = tp.getElementsByTagName("DistanceMeters")[0];
-
-        let speedVal = 0;
-        const speedNode = tp.getElementsByTagName("Speed")[0] || tp.getElementsByTagName("ns3:Speed")[0];
-        if (speedNode) speedVal = parseFloat(speedNode.textContent) * 3.6;
 
         if (lat && lon) {
           const timestamp = time ? new Date(time.textContent).getTime() : 0;
           const currentLat = parseFloat(lat.textContent);
           const currentLon = parseFloat(lon.textContent);
-          
-          if (distNode) {
-            totalDist = parseFloat(distNode.textContent) / 1000;
-          } else if (list.length > 0) {
+          const currentAlt = alt ? parseFloat(alt.textContent) : 0;
+          const curHR = hr ? parseInt(hr.querySelector("Value").textContent, 10) : 0;
+
+          let dt = 0;
+          let ds = 0;
+
+          if (list.length > 0) {
             const prev = list[list.length - 1];
-            totalDist += getDistKm(prev.lat, prev.lon, currentLat, currentLon);
+            dt = Math.max(0, (timestamp - prev.timestamp) / 1000);
+            ds = getDistKm(prev.lat, prev.lon, currentLat, currentLon);
+            totalDist += ds;
+
+            // 爬升累加 (大於 0.8m 濾除微波噪聲)
+            if (currentAlt > prev.alt && (currentAlt - prev.alt) > 0.8) {
+              totalAscent += (currentAlt - prev.alt);
+            }
+
+            // 休息判定：時速 < 3 km/h
+            const instSpeed = (dt > 0) ? (ds / dt) * 3600 : 0;
+            if (instSpeed < 3) {
+              currentStopSec += dt;
+              if (currentStopSec >= 120 && !isResting) { // 靜止超過 2 分鐘，計為一次休息
+                isResting = true;
+                restCount++;
+              }
+              if (isResting) {
+                totalRestSec += dt;
+              }
+            } else {
+              currentStopSec = 0;
+              isResting = false;
+            }
           }
 
-          if (!speedNode && list.length > 0) {
-            const prev = list[list.length - 1];
-            const dt = (timestamp - prev.timestamp) / 1000;
-            const ds = getDistKm(prev.lat, prev.lon, currentLat, currentLon);
-            speedVal = (dt > 0) ? (ds / dt) * 3600 : 0;
+          if (curHR > 0) {
+            hrSum += curHR;
+            hrCount++;
           }
+
+          // 計算純移動時間下的平均時速
+          const totalElapsedSec = list.length > 0 ? (timestamp - list[0].timestamp) / 1000 : 0;
+          const movingSec = Math.max(1, totalElapsedSec - totalRestSec);
+          const avgSpeed = (totalDist / (movingSec / 3600));
 
           list.push({
             lat: currentLat,
             lon: currentLon,
-            alt: alt ? Math.round(parseFloat(alt.textContent)) : 0,
-            hr: hr ? parseInt(hr.querySelector("Value").textContent, 10) : 0,
-            cad: cad ? parseInt(cad.textContent, 10) : 0,
+            alt: Math.round(currentAlt),
+            ascent: Math.round(totalAscent),
+            hr: curHR,
+            avgHR: hrCount > 0 ? Math.round(hrSum / hrCount) : 0,
             dist: totalDist,
-            speed: Math.min(85, Math.max(0, Math.round(speedVal))),
-            timestamp: timestamp
+            avgSpeed: parseFloat(avgSpeed.toFixed(1)),
+            timestamp: timestamp,
+            restCount: restCount,
+            restSec: Math.round(totalRestSec)
           });
         }
       }
@@ -361,7 +407,6 @@
       return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     }
 
-    // 粗估西海岸騎乘經過之縣市
     function estimateTaiwanCity(lat) {
       if (lat >= 25.15) return "新北 富貴角";
       if (lat >= 25.00) return "新北市";
@@ -385,7 +430,6 @@
       return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     }
 
-    // 繪製右上角迷你雷達全圖
     function drawMinimap(idx) {
       if (!miniBounds) return;
       miniCtx.clearRect(0, 0, miniCanvas.width, miniCanvas.height);
@@ -403,7 +447,6 @@
         return { x, y };
       }
 
-      // 底線
       miniCtx.beginPath();
       miniCtx.strokeStyle = '#444';
       miniCtx.lineWidth = 3;
@@ -414,7 +457,6 @@
       });
       miniCtx.stroke();
 
-      // 橘色動態線
       miniCtx.beginPath();
       miniCtx.strokeStyle = '#fc5200';
       miniCtx.lineWidth = 4;
@@ -425,7 +467,6 @@
       }
       miniCtx.stroke();
 
-      // 當前位置小紅點
       const curPos = toMiniPos(trackPoints[idx]);
       miniCtx.beginPath();
       miniCtx.arc(curPos.x, curPos.y, 5, 0, Math.PI * 2);
@@ -440,7 +481,6 @@
       if (!trackPoints.length || !isMapLoaded) return;
       const current = trackPoints[idx];
 
-      // 高空鳥瞰俯瞰前進（平滑跟隨、固定方向正北）
       map.jumpTo({
         center: [current.lon, current.lat],
         zoom: 9.2,
@@ -462,12 +502,11 @@
         });
       }
 
-      // 更新 HUD
+      // 更新頂部 HUD
       const totalDist = trackPoints[trackPoints.length - 1].dist || 1;
       const pct = Math.min(100, Math.round((current.dist / totalDist) * 100));
       document.getElementById('hudDist').innerText = `${current.dist.toFixed(1)} km`;
       document.getElementById('hudPct').innerText = `/ ${totalDist.toFixed(1)} km (${pct}%)`;
-
       document.getElementById('hudCity').innerText = estimateTaiwanCity(current.lat);
 
       if (startTimeEpoch && current.timestamp) {
@@ -475,13 +514,19 @@
         document.getElementById('hudTime').innerText = formatDuration(elapsedSec);
       }
 
-      document.getElementById('valSpeed').innerText = current.speed;
-      document.getElementById('valHR').innerText = current.hr || '--';
-      document.getElementById('valHR').style.color = (current.hr > 165) ? '#ff4d4f' : '#fff';
+      // 更新底部各統計卡片
+      document.getElementById('valAvgSpeed').innerText = current.avgSpeed.toFixed(1);
+      document.getElementById('valAvgHR').innerText = current.avgHR || '--';
+      document.getElementById('valCurHR').innerText = current.hr || '--';
+      document.getElementById('valCurHR').style.color = (current.hr > 165) ? '#ff4d4f' : '#fff';
+      document.getElementById('valAscent').innerText = current.ascent;
       document.getElementById('valElev').innerText = current.alt;
-      document.getElementById('valCad').innerText = current.cad || '--';
+      
+      document.getElementById('valRest').innerText = `${current.restCount}次`;
+      const restMin = Math.round(current.restSec / 60);
+      document.getElementById('valRestTime').innerText = restMin > 60 ? `${Math.floor(restMin/60)}時${restMin%60}分` : `${restMin}分`;
 
-      // 顯隱邏輯
+      // 顯隱狀態連動
       const showDist = document.getElementById('showDist').checked;
       const showTime = document.getElementById('showTime').checked;
       document.getElementById('topHud').style.display = (showDist || showTime) ? 'flex' : 'none';
@@ -489,10 +534,12 @@
       document.getElementById('hudTime').style.display = showTime ? 'inline' : 'none';
       document.getElementById('minimapCard').style.display = document.getElementById('showMinimap').checked ? 'block' : 'none';
 
-      document.getElementById('boxSpeed').style.display = document.getElementById('showSpeed').checked ? 'block' : 'none';
-      document.getElementById('boxHR').style.display = document.getElementById('showHR').checked ? 'block' : 'none';
+      document.getElementById('boxAvgSpeed').style.display = document.getElementById('showAvgSpeed').checked ? 'block' : 'none';
+      document.getElementById('boxAvgHR').style.display = document.getElementById('showAvgHR').checked ? 'block' : 'none';
+      document.getElementById('boxCurHR').style.display = document.getElementById('showCurHR').checked ? 'block' : 'none';
+      document.getElementById('boxAscent').style.display = document.getElementById('showAscent').checked ? 'block' : 'none';
       document.getElementById('boxElev').style.display = document.getElementById('showElev').checked ? 'block' : 'none';
-      document.getElementById('boxCad').style.display = document.getElementById('showCad').checked ? 'block' : 'none';
+      document.getElementById('boxRest').style.display = document.getElementById('showRest').checked ? 'block' : 'none';
 
       drawMinimap(idx);
     }
@@ -536,7 +583,7 @@
       else runAnimation();
     });
 
-    // 純淨 9:16 後台畫布錄影合成引擎（100% 只錄右側直式視窗）
+    // 專屬 9:16 純淨輸出
     document.getElementById('btnRecord').addEventListener('click', function() {
       const btn = this;
       btn.disabled = true;
@@ -547,10 +594,8 @@
       const mapCanvas = map.getCanvas();
 
       function composeFrame() {
-        // 1. 抓取地圖畫面
         recCtx.drawImage(mapCanvas, 0, 0, recCanvas.width, recCanvas.height);
 
-        // 2. 疊加頂部 HUD
         const showDist = document.getElementById('showDist').checked;
         const showTime = document.getElementById('showTime').checked;
         if (showDist || showTime) {
@@ -579,7 +624,6 @@
           }
         }
 
-        // 3. 疊加右上角雷達圖
         if (document.getElementById('showMinimap').checked) {
           recCtx.fillStyle = 'rgba(18, 18, 18, 0.85)';
           recCtx.roundRect(recCanvas.width - 180, 32, 148, 250, 14);
@@ -587,12 +631,14 @@
           recCtx.drawImage(miniCanvas, recCanvas.width - 180, 32, 148, 250);
         }
 
-        // 4. 疊加底部 HUD
+        // 底部數據合成
         const activeBoxes = [];
-        if (document.getElementById('showSpeed').checked) activeBoxes.push({ label: '時速', val: document.getElementById('valSpeed').innerText, unit: 'km/h' });
-        if (document.getElementById('showHR').checked) activeBoxes.push({ label: '心率', val: document.getElementById('valHR').innerText, unit: 'bpm' });
+        if (document.getElementById('showAvgSpeed').checked) activeBoxes.push({ label: '均速', val: document.getElementById('valAvgSpeed').innerText, unit: 'km/h' });
+        if (document.getElementById('showAvgHR').checked) activeBoxes.push({ label: '平均心率', val: document.getElementById('valAvgHR').innerText, unit: 'bpm' });
+        if (document.getElementById('showCurHR').checked) activeBoxes.push({ label: '心率', val: document.getElementById('valCurHR').innerText, unit: 'bpm' });
+        if (document.getElementById('showAscent').checked) activeBoxes.push({ label: '總爬升', val: document.getElementById('valAscent').innerText, unit: 'm' });
         if (document.getElementById('showElev').checked) activeBoxes.push({ label: '海拔', val: document.getElementById('valElev').innerText, unit: 'm' });
-        if (document.getElementById('showCad').checked) activeBoxes.push({ label: '踏頻', val: document.getElementById('valCad').innerText, unit: 'rpm' });
+        if (document.getElementById('showRest').checked) activeBoxes.push({ label: '休息', val: document.getElementById('valRest').innerText, unit: document.getElementById('valRestTime').innerText });
 
         if (activeBoxes.length > 0) {
           const bY = recCanvas.height - 180;
@@ -603,18 +649,18 @@
           recCtx.fill();
 
           activeBoxes.forEach((item, i) => {
-            const ix = 52 + (i * bW);
+            const ix = 48 + (i * bW);
             recCtx.fillStyle = '#888888';
-            recCtx.font = 'bold 18px sans-serif';
+            recCtx.font = 'bold 16px sans-serif';
             recCtx.fillText(item.label, ix, bY + 36);
 
             recCtx.fillStyle = '#ffffff';
-            recCtx.font = 'bold 36px sans-serif';
-            recCtx.fillText(item.val, ix, bY + 82);
+            recCtx.font = 'bold 28px sans-serif';
+            recCtx.fillText(item.val, ix, bY + 80);
 
             recCtx.fillStyle = '#aaaaaa';
-            recCtx.font = '16px sans-serif';
-            recCtx.fillText(item.unit, ix + (item.val.length * 20) + 4, bY + 82);
+            recCtx.font = '14px sans-serif';
+            recCtx.fillText(item.unit, ix + (item.val.length * 18) + 4, bY + 80);
           });
         }
       }
