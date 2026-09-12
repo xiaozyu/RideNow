@@ -53,7 +53,26 @@
     }
     #minimapCanvas { width: 100%; height: 100%; }
 
-    /* Google 街景小人按鈕 */
+    /* 藍點旁手寫風/引線標籤 DOM 樣式 */
+    .rest-marker-container {
+      display: flex; align-items: center; pointer-events: auto; cursor: pointer;
+      transform: translate(-6px, -6px);
+    }
+    .rest-dot {
+      width: 10px; height: 10px; background: #00ffff; border: 2px solid #ffffff;
+      border-radius: 50%; box-shadow: 0 0 8px #00ffff; flex-shrink: 0;
+    }
+    .rest-tag {
+      margin-left: 6px; background: rgba(5, 17, 30, 0.88); border: 1px solid #00ffff;
+      color: #ffffff; font-size: 11px; font-weight: bold; padding: 2px 6px;
+      border-radius: 4px; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+      transition: transform 0.1s, background 0.1s;
+    }
+    .rest-marker-container:hover .rest-tag {
+      background: #00ffff; color: #000; transform: scale(1.08);
+    }
+
+    /* 街景小人按鈕 */
     #streetview-pegman {
       position: absolute; right: 16px; bottom: 170px; width: 44px; height: 44px;
       background: #ffffff; border-radius: 50%; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
@@ -64,16 +83,29 @@
     #streetview-pegman.active { background: #fc5200; }
     #streetview-pegman svg { width: 26px; height: 26px; }
 
-    /* 街景彈窗全螢幕 Modal */
+    /* 街景全螢幕視窗 + 導航控制器 */
     #streetviewModal {
       display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
       background: #000; z-index: 50; flex-direction: column;
     }
     #streetviewModal iframe { width: 100%; height: 100%; border: none; }
-    #closeModal {
-      position: absolute; top: 12px; right: 12px; background: rgba(0,0,0,0.7);
-      color: #fff; border: 1px solid #fff; border-radius: 4px; padding: 6px 12px;
-      font-size: 12px; font-weight: bold; cursor: pointer; z-index: 55;
+    
+    .sv-navbar {
+      position: absolute; top: 12px; left: 12px; right: 12px;
+      display: flex; justify-content: space-between; align-items: center;
+      background: rgba(18, 18, 18, 0.88); backdrop-filter: blur(8px);
+      padding: 8px 12px; border-radius: 10px; border: 1px solid #333; z-index: 55;
+    }
+    .sv-title { font-size: 13px; font-weight: bold; color: #00ffff; }
+    .sv-nav-btns { display: flex; gap: 6px; }
+    .sv-nav-btn {
+      background: #2a2a2a; color: #fff; border: 1px solid #555;
+      padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: bold; cursor: pointer;
+    }
+    .sv-nav-btn:hover { background: #fc5200; border-color: #fc5200; }
+    .sv-close-btn {
+      background: #d93025; color: #fff; border: none; padding: 4px 10px;
+      border-radius: 6px; font-size: 12px; font-weight: bold; cursor: pointer;
     }
 
     .hud-bottom {
@@ -103,7 +135,7 @@
       <label><input type="checkbox" id="showAvgHR" checked> 平均心率 (Avg HR)</label>
       <label><input type="checkbox" id="showAscent" checked> 累積爬升 (Ascent)</label>
       <label><input type="checkbox" id="showRest" checked> 累計休息 (次數 / 時間)</label>
-      <label><input type="checkbox" id="showRestMarkers" checked> 地圖標記休息時間與引線</label>
+      <label><input type="checkbox" id="showRestMarkers" checked> 地圖顯示休息標籤 (可點擊看街景)</label>
       <label><input type="checkbox" id="showDist" checked> 累積里程與進度</label>
       <label><input type="checkbox" id="showTime" checked> 已騎乘時間</label>
       <label><input type="checkbox" id="showMinimap" checked> 右上角全島雷達圖</label>
@@ -132,17 +164,23 @@
   <div id="render-container">
     <div id="map"></div>
 
-    <!-- 經典 Google 街景小人按鈕 -->
-    <div id="streetview-pegman" title="點擊切換街景選取模式">
+    <div id="streetview-pegman" title="切換街景點擊模式">
       <svg viewBox="0 0 24 24">
         <circle cx="12" cy="5" r="3" fill="#fbbc04"/>
         <path d="M12 9c-2.2 0-4 1.8-4 4v7h2.5v-5h3v5H16v-7c0-2.2-1.8-4-4-4z" fill="#fbbc04"/>
       </svg>
     </div>
 
-    <!-- 街景載入視窗 -->
+    <!-- 附帶上一站/下一站控制列的街景視窗 -->
     <div id="streetviewModal">
-      <button id="closeModal">關閉街景</button>
+      <div class="sv-navbar">
+        <div class="sv-title" id="svInfoTitle">休息站街景</div>
+        <div class="sv-nav-btns">
+          <button class="sv-nav-btn" id="btnPrevRest">◀ 上一站</button>
+          <button class="sv-nav-btn" id="btnNextRest">下一站 ▶</button>
+          <button class="sv-close-btn" id="closeModal">✕</button>
+        </div>
+      </div>
       <iframe id="svFrame" src=""></iframe>
     </div>
 
@@ -189,6 +227,8 @@
   <script>
     let trackPoints = [];
     let restStops = [];
+    let activeRestMarkers = [];
+    let currentRestIndex = -1; // 當前正在看第幾個休息站
     let isPlaying = false;
     let animTimer = null;
     let startTimeEpoch = 0;
@@ -248,42 +288,6 @@
         paint: { 'line-color': '#fc5200', 'line-width': 4 }
       });
 
-      // 休息站藍點圖層
-      map.addSource('rest-stops', {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: [] }
-      });
-      map.addLayer({
-        id: 'rest-stops-points',
-        type: 'circle',
-        source: 'rest-stops',
-        paint: {
-          'circle-radius': 6,
-          'circle-color': '#00ffff',
-          'circle-stroke-width': 2,
-          'circle-stroke-color': '#ffffff'
-        }
-      });
-
-      // 斜引線 + 休息文字標籤圖層
-      map.addLayer({
-        id: 'rest-stops-labels',
-        type: 'symbol',
-        source: 'rest-stops',
-        layout: {
-          'text-field': ['get', 'label'],
-          'text-size': 12,
-          'text-offset': [1.2, -1.0], // 往右上角拉開距離（像引線標記）
-          'text-anchor': 'bottom-left',
-          'text-allow-overlap': true
-        },
-        paint: {
-          'text-color': '#ffffff',
-          'text-halo-color': '#05111e',
-          'text-halo-width': 3
-        }
-      });
-
       map.addSource('point-cursor', {
         type: 'geojson',
         data: { type: 'Feature', geometry: { type: 'Point', coordinates: [0, 0] } }
@@ -303,7 +307,7 @@
       if (trackPoints.length > 0) initRoute();
     });
 
-    // 街景小人開關與點擊行為
+    // 街景小人按鈕
     const pegmanBtn = document.getElementById('streetview-pegman');
     pegmanBtn.addEventListener('click', () => {
       isPegmanActive = !isPegmanActive;
@@ -311,32 +315,28 @@
       map.getCanvas().style.cursor = isPegmanActive ? 'crosshair' : '';
     });
 
-    // 地圖點擊：若處於小人模式或點擊藍點，立即調出 Google 街景
     map.on('click', (e) => {
-      let targetCoords = null;
-
-      // 檢查是否直接點擊到休息藍點
-      const features = map.queryRenderedFeatures(e.point, { layers: ['rest-stops-points'] });
-      if (features.length > 0) {
-        targetCoords = features[0].geometry.coordinates;
-      } else if (isPegmanActive) {
-        targetCoords = [e.lngLat.lng, e.lngLat.lat];
-      }
-
-      if (targetCoords) {
-        openStreetView(targetCoords[1], targetCoords[0]);
-        if (isPegmanActive) {
-          isPegmanActive = false;
-          pegmanBtn.classList.remove('active');
-          map.getCanvas().style.cursor = '';
-        }
+      if (isPegmanActive) {
+        openStreetView(e.lngLat.lat, e.lngLat.lng, "自選點街景");
+        isPegmanActive = false;
+        pegmanBtn.classList.remove('active');
+        map.getCanvas().style.cursor = '';
       }
     });
 
-    function openStreetView(lat, lon) {
+    // 開啟街景並載入導航
+    function openRestStreetView(restIdx) {
+      if (restIdx < 0 || restIdx >= restStops.length) return;
+      currentRestIndex = restIdx;
+      const r = restStops[restIdx];
+      const title = `${r.order}次 ${formatMinOnly(r.durationSec)} / ${formatClockTime(r.accumRestSec)}`;
+      openStreetView(r.lat, r.lon, title);
+    }
+
+    function openStreetView(lat, lon, titleText) {
       const modal = document.getElementById('streetviewModal');
       const frame = document.getElementById('svFrame');
-      // 使用 Google Maps 官方 StreetView 內嵌網址
+      document.getElementById('svInfoTitle').innerText = titleText || "街景模式";
       frame.src = `https://maps.google.com/maps?q=&layer=c&cbll=${lat},${lon}&cbp=11,0,0,0,0&output=svembed`;
       modal.style.display = 'flex';
     }
@@ -344,6 +344,18 @@
     document.getElementById('closeModal').addEventListener('click', () => {
       document.getElementById('streetviewModal').style.display = 'none';
       document.getElementById('svFrame').src = '';
+    });
+
+    document.getElementById('btnPrevRest').addEventListener('click', () => {
+      if (currentRestIndex > 0) {
+        openRestStreetView(currentRestIndex - 1);
+      }
+    });
+
+    document.getElementById('btnNextRest').addEventListener('click', () => {
+      if (currentRestIndex < restStops.length - 1) {
+        openRestStreetView(currentRestIndex + 1);
+      }
     });
 
     const scrubber = document.getElementById('progressScrubber');
@@ -423,6 +435,10 @@
       trackPoints = downsample(raw, 900);
       restStops = rests;
       startTimeEpoch = trackPoints[0].timestamp;
+
+      // 清除舊的 HTML 藍點標籤
+      activeRestMarkers.forEach(m => m.remove());
+      activeRestMarkers = [];
 
       const totalRestCount = restStops.length;
       const totalRestMin = restStops.length > 0 ? Math.round(restStops[restStops.length - 1].accumRestSec / 60) : 0;
@@ -688,6 +704,7 @@
       miniCtx.stroke();
     }
 
+    // 核心更新：使用 HTML DOM Marker，確保藍點與三段文字 100% 顯現且支援點擊跳街景
     function updateFrame(idx) {
       if (!trackPoints.length || !isMapLoaded) return;
       const current = trackPoints[idx];
@@ -713,21 +730,40 @@
         });
       }
 
-      // 休息站藍點與「1次 3分 / 0:3」格式渲染
+      // 渲染藍點 + 文字標籤（HTML DOM Marker）
       const showRestMarkers = document.getElementById('showRestMarkers').checked;
       const passedRestStops = restStops.filter(r => r.dist <= current.dist);
 
-      if (map.getSource('rest-stops')) {
-        map.getSource('rest-stops').setData({
-          type: 'FeatureCollection',
-          features: showRestMarkers ? passedRestStops.map(r => ({
-            type: 'Feature',
-            geometry: { type: 'Point', coordinates: [r.lon, r.lat] },
-            properties: {
-              label: `${r.order}次 ${formatMinOnly(r.durationSec)} / ${formatClockTime(r.accumRestSec)}`
-            }
-          })) : []
-        });
+      // 清除多餘的標記
+      while (activeRestMarkers.length > passedRestStops.length) {
+        const m = activeRestMarkers.pop();
+        m.remove();
+      }
+
+      // 建立或更新新通過的標記
+      if (showRestMarkers) {
+        for (let i = activeRestMarkers.length; i < passedRestStops.length; i++) {
+          const r = passedRestStops[i];
+          const el = document.createElement('div');
+          el.className = 'rest-marker-container';
+          el.innerHTML = `
+            <div class="rest-dot"></div>
+            <div class="rest-tag">${r.order}次 ${formatMinOnly(r.durationSec)} / ${formatClockTime(r.accumRestSec)}</div>
+          `;
+          el.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            openRestStreetView(i);
+          });
+
+          const marker = new maplibregl.Marker({ element: el, anchor: 'left' })
+            .setLngLat([r.lon, r.lat])
+            .addTo(map);
+
+          activeRestMarkers.push(marker);
+        }
+      } else {
+        activeRestMarkers.forEach(m => m.remove());
+        activeRestMarkers = [];
       }
 
       // 頂部 HUD
@@ -805,7 +841,7 @@
       else runAnimation();
     });
 
-    // 專屬 9:16 純淨輸出
+    // 專屬 9:16 純淨輸出（同步將 DOM 標籤座標繪入錄影畫布）
     document.getElementById('btnRecord').addEventListener('click', function() {
       const btn = this;
       btn.disabled = true;
@@ -817,6 +853,45 @@
 
       function composeFrame() {
         recCtx.drawImage(mapCanvas, 0, 0, recCanvas.width, recCanvas.height);
+
+        // 繪製已通過的休息站點與文字標籤到輸出影片
+        if (document.getElementById('showRestMarkers').checked) {
+          const currentProgress = parseFloat(scrubber.value) / 1000;
+          const currentIdx = Math.min(trackPoints.length - 1, Math.floor(currentProgress * trackPoints.length));
+          const currentDist = trackPoints[currentIdx].dist;
+          const passed = restStops.filter(r => r.dist <= currentDist);
+
+          passed.forEach(r => {
+            const p = map.project([r.lon, r.lat]);
+            // 縮放對齊至 720x1280
+            const sx = (p.x / map.getContainer().clientWidth) * recCanvas.width;
+            const sy = (p.y / map.getContainer().clientHeight) * recCanvas.height;
+
+            // 藍點
+            recCtx.beginPath();
+            recCtx.arc(sx, sy, 8, 0, Math.PI * 2);
+            recCtx.fillStyle = '#00ffff';
+            recCtx.fill();
+            recCtx.lineWidth = 3;
+            recCtx.strokeStyle = '#ffffff';
+            recCtx.stroke();
+
+            // 標籤框
+            const txt = `${r.order}次 ${formatMinOnly(r.durationSec)} / ${formatClockTime(r.accumRestSec)}`;
+            recCtx.font = 'bold 20px sans-serif';
+            const tw = recCtx.measureText(txt).width;
+
+            recCtx.fillStyle = 'rgba(5, 17, 30, 0.9)';
+            recCtx.strokeStyle = '#00ffff';
+            recCtx.lineWidth = 1.5;
+            recCtx.roundRect(sx + 14, sy - 18, tw + 18, 36, 6);
+            recCtx.fill();
+            recCtx.stroke();
+
+            recCtx.fillStyle = '#ffffff';
+            recCtx.fillText(txt, sx + 23, sy + 7);
+          });
+        }
 
         const showDist = document.getElementById('showDist').checked;
         const showTime = document.getElementById('showTime').checked;
