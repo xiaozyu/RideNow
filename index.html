@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>單車 IG 限動視覺化生成器</title>
+  <style>
+    body {
+      margin: 0; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #121212; color: #fff; display: flex; gap: 24px;
+    }
+    .panel { width: 340px; display: flex; flex-direction: column; gap: 16px; }
+    .control-group { background: #1e1e1e; padding: 14px; border-radius: 8px; font-size: 14px; }
+    .control-group label { display: block; margin-bottom: 8px; font-weight: bold; }
+    .checkbox-group label { display: flex; align-items: center; gap: 8px; font-weight: normal; margin-bottom: 6px; cursor: pointer; }
+    input[type="range"] { width: 100%; }
+    button {
+      background: #fc5200; color: #fff; border: none; padding: 10px 14px;
+      border-radius: 6px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 6px;
+    }
+    button:disabled { background: #555; cursor: not-allowed; }
+    #preview-container {
+      position: relative; width: 360px; height: 640px;
+      border-radius: 16px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+      background: #000; border: 2px solid #333;
+    }
+    /* 隱藏原生地圖 DOM，將其直接即時截圖繪入 Canvas */
+    #hiddenMap { width: 360px; height: 640px; position: absolute; top: -9999px; left: -9999px; }
+    canvas { width: 100%; height: 100%; display: block; }
+  </style>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body>
+
+  <!-- 控制面板 -->
+  <div class="panel">
+    <div class="control-group">
+      <label>1. 匯入活動檔案</label>
+      <input type="file" id="tcxInput" accept=".tcx" />
+      <div id="status" style="margin-top: 6px; color: #aaa; font-size: 12px;">支援 Garmin .tcx 檔案</div>
+    </div>
+
+    <div class="control-group checkbox-group">
+      <label>2. 自訂 HUD 儀表顯示</label>
+      <label><input type="checkbox" id="showSpeed" checked> 即時時速 (Speed)</label>
+      <label><input type="checkbox" id="showHR" checked> 即時心率 (Heart Rate)</label>
+      <label><input type="checkbox" id="showElevation" checked> 當前海拔 (Altitude)</label>
+      <label><input type="checkbox" id="showProgress" checked> 總里程與百分比進度條</label>
+    </div>
+
+    <div class="control-group">
+      <label>3. 播放與鏡頭設定</label>
+      <label style="font-weight:normal; font-size:12px;">視角跟隨模式</label>
+      <select id="cameraMode" style="width: 100%; padding: 6px; background:#2a2a2a; color:#fff; border:none; border-radius:4px; margin-bottom:10px;">
+        <option value="follow">特寫動態跟隨 (Strava 風格)</option>
+        <option value="overview">全島/全路徑靜態俯瞰</option>
+      </select>
+      <label style="font-weight:normal; font-size:12px;">影片播放長度: <span id="durationVal">15</span> 秒</label>
+      <input type="range" id="durationSlider" min="5" max="60" value="15" />
+    </div>
+
+    <div class="control-group">
+      <label>4. 影片匯出</label>
+      <button id="btnPlay" disabled>播放預覽</button>
+      <button id="btnRecord" disabled style="background:#28a745;">錄製並下載 IG 限動 (WebM)</button>
+    </div>
+  </div>
+
+  <!-- 9:16 限動直式畫布 -->
+  <div id="preview-container">
+    <canvas id="exportCanvas" width="720" height="1280"></canvas>
+  </div>
+
+  <!-- 離屏地圖引擎 -->
+  <div id="hiddenMap"></div>
+
+  <script>
+    const canvas = document.getElementById('exportCanvas');
+    const ctx = canvas.getContext('2d');
+    let trackPoints = [];
+    let isPlaying = false;
+    let animId = null;
+
+    // 初始化 Leaflet 離屏地圖（使用 Esri 高清實景衛星空拍圖）
+    const map = L.map('hiddenMap', { zoomControl: false, attributionControl: false }).setView([23.5, 121], 8);
+    const satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 18 }).addTo(map);
+
+    // 解析 TCX 函數
+    document.getElementById('tcxInput').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        trackPoints = parseTCX(evt.target.result);
+        if (trackPoints.length > 0) {
+          document.getElementById('status').innerText = `已載入 ${trackPoints.length} 個航點`;
+          document.getElementById('btnPlay').disabled = false;
+          document.getElementById('btnRecord').disabled = false;
+          drawFrame(0); // 渲染起始影格
+        }
+      };
+      reader.readAsText(file);
+    });
+
+    function parseTCX(xmlStr) {
+      const xml = new DOMParser().parseFromString(xmlStr, "application/xml");
+      const nodes = xml.getElementsByTagName("Trackpoint");
+      const list = [];
+      let totalDist = 0;
+
+      for (let i = 0; i < nodes.length; i++) {
+        const lat = nodes[i].getElementsByTagName("LatitudeDegrees")[0];
+        const lon = nodes[i].getElementsByTagName("LongitudeDegrees")[0];
+        const alt = nodes[i].getElementsByTagName("AltitudeMeters")[0];
+        const hr = nodes[i].getElementsByTagName("HeartRateBpm")[0];
+
+        if (lat && lon) {
+          const pt = {
+            lat: parseFloat(lat.textContent),
+            lon: parseFloat(lon.textContent),
+            alt: alt ? Math.round(parseFloat(alt.textContent)) : 0,
+            hr: hr ? parseInt(hr.querySelector("Value").textContent, 10) : 0,
+            speed: 0
+          };
+
+          // 簡易計算速度 (km/h)
+          if (list.length > 0) {
+            const prev = list[list.length - 1];
+            const d = getDistKm(prev.lat, prev.lon, pt.lat, pt.lon);
+            totalDist += d;
+            pt.dist = totalDist;
+            pt.speed = Math.round(d * 3600); // 概抓每秒時速
+          } else {
+            pt.dist = 0;
+          }
+          list.push(pt);
+        }
+      }
+      return list;
+    }
+
+    function getDistKm(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    // 核心渲染器
+    function drawFrame(idx) {
+      if (!trackPoints.length) return;
+      const pt = trackPoints[idx];
+      const cameraMode = document.getElementById('cameraMode').value;
+
+      // 1. 同步地圖鏡頭視角
+      if (cameraMode === 'follow') {
+        map.setView([pt.lat, pt.lon], 14, { animate: false });
+      } else {
+        const bounds = L.latLngBounds(trackPoints.map(p => [p.lat, p.lon]));
+        map.fitBounds(bounds, { animate: false });
+      }
+
+      // 2. 清除畫布並繪製底層地圖（以點位為基準進行動態投影映射）
+      ctx.fillStyle = '#0a0e14';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // 繪製軌跡拖尾線
+      ctx.beginPath();
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = '#fc5200'; // Strava 經典亮橘色
+      ctx.lineCap = 'round';
+
+      for (let i = 0; i <= idx; i++) {
+        const pos = projectToCanvas(trackPoints[i]);
+        if (i === 0) ctx.moveTo(pos.x, pos.y);
+        else ctx.lineTo(pos.x, pos.y);
+      }
+      ctx.stroke();
+
+      // 繪製當前動態游標點
+      const curPos = projectToCanvas(pt);
+      ctx.beginPath();
+      ctx.arc(curPos.x, curPos.y, 10, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = '#fc5200';
+      ctx.stroke();
+
+      // 3. 疊加自訂 HUD 數據
+      drawHUD(pt, idx);
+    }
+
+    // 座標投影轉換（將經緯度轉換為當前直式畫布的 X, Y）
+    function projectToCanvas(p) {
+      const bounds = map.getBounds();
+      const southWest = bounds.getSouthWest();
+      const northEast = bounds.getNorthEast();
+
+      const x = ((p.lon - southWest.lng) / (northEast.lng - southWest.lng)) * canvas.width;
+      const y = ((northEast.lat - p.lat) / (northEast.lat - southWest.lat)) * canvas.height;
+      return { x, y };
+    }
+
+    // HUD 繪製邏輯
+    function drawHUD(pt, idx) {
+      const showSpeed = document.getElementById('showSpeed').checked;
+      const showHR = document.getElementById('showHR').checked;
+      const showElev = document.getElementById('showElevation').checked;
+      const showProg = document.getElementById('showProgress').checked;
+
+      // 頂部/中下數據卡片容器
+      let startY = 120;
+
+      // 繪製頂部總覽卡
+      if (showProg) {
+        const total = trackPoints[trackPoints.length - 1].dist || 1;
+        const current = pt.dist || 0;
+        const pct = Math.min(100, Math.round((current / total) * 100));
+
+        ctx.fillStyle = 'rgba(20, 20, 20, 0.75)';
+        ctx.roundRect(40, 60, canvas.width - 80, 80, 16);
+        ctx.fill();
+
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 26px sans-serif';
+        ctx.fillText(`${current.toFixed(1)} km`, 60, 110);
+
+        ctx.fillStyle = '#aaa';
+        ctx.font = '20px sans-serif';
+        ctx.fillText(`/ ${total.toFixed(1)} km (${pct}%)`, 200, 110);
+      }
+
+      // 中下浮動數據 HUD (時速 / 心率 / 海拔)
+      const hudItems = [];
+      if (showSpeed) hudItems.push({ label: 'SPEED', val: `${pt.speed > 80 ? '--' : pt.speed}`, unit: 'km/h' });
+      if (showHR) hudItems.push({ label: 'HEART RATE', val: `${pt.hr || '--'}`, unit: 'bpm', alert: pt.hr > 165 });
+      if (showElev) hudItems.push({ label: 'ELEVATION', val: `${pt.alt}`, unit: 'm' });
+
+      if (hudItems.length > 0) {
+        const blockWidth = (canvas.width - 80) / hudItems.length;
+        const hudY = canvas.height - 180;
+
+        ctx.fillStyle = 'rgba(20, 20, 20, 0.85)';
+        ctx.roundRect(40, hudY, canvas.width - 80, 110, 18);
+        ctx.fill();
+
+        hudItems.forEach((item, i) => {
+          const itemX = 60 + (i * blockWidth);
+          ctx.fillStyle = '#888';
+          ctx.font = 'bold 16px sans-serif';
+          ctx.fillText(item.label, itemX, hudY + 36);
+
+          ctx.fillStyle = item.alert ? '#ff3b30' : '#ffffff';
+          ctx.font = 'bold 36px sans-serif';
+          ctx.fillText(item.val, itemX, hudY + 80);
+
+          ctx.fillStyle = '#aaa';
+          ctx.font = '16px sans-serif';
+          ctx.fillText(item.unit, itemX + (item.val.length * 22) + 6, hudY + 80);
+        });
+      }
+    }
+
+    // 播放動畫邏輯
+    function startAnimation(onComplete) {
+      if (isPlaying) return;
+      isPlaying = true;
+      const duration = parseInt(document.getElementById('durationSlider').value, 10) * 1000;
+      const startTime = performance.now();
+      const totalPoints = trackPoints.length;
+
+      function step(now) {
+        const elapsed = now - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        const currentIndex = Math.floor(progress * (totalPoints - 1));
+
+        drawFrame(currentIndex);
+
+        if (progress < 1) {
+          animId = requestAnimationFrame(step);
+        } else {
+          isPlaying = false;
+          if (onComplete) onComplete();
+        }
+      }
+      animId = requestAnimationFrame(step);
+    }
+
+    document.getElementById('btnPlay').addEventListener('click', () => startAnimation());
+
+    // 錄製與匯出功能
+    document.getElementById('btnRecord').addEventListener('click', function() {
+      const btn = this;
+      btn.disabled = true;
+      btn.innerText = '正在錄製中...';
+
+      // 取得畫布串流 (30 FPS)
+      const stream = canvas.captureStream(30);
+      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm; codecs=vp9' });
+      const chunks = [];
+
+      recorder.ondataavailable = e => chunks.push(e.data);
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ride_story_${Date.now()}.webm`;
+        a.click();
+        btn.disabled = false;
+        btn.innerText = '錄製並下載 IG 限動 (WebM)';
+      };
+
+      recorder.start();
+      startAnimation(() => {
+        recorder.stop();
+      });
+    });
+
+    document.getElementById('durationSlider').addEventListener('input', function(e) {
+      document.getElementById('durationVal').innerText = e.target.value;
+    });
+  </script>
+</body>
+</html>
