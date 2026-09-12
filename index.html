@@ -47,7 +47,6 @@
     .hud-top .city { color: #fc5200; font-weight: bold; }
     .hud-top .time { color: #aaa; }
 
-    /* 頂部里程進度條 */
     .progress-track {
       width: 100%; height: 4px; background: rgba(255, 255, 255, 0.2);
       border-radius: 2px; overflow: hidden; margin-top: 2px;
@@ -57,7 +56,6 @@
       transition: width 0.05s linear;
     }
     
-    /* 右上角縮圖卡片 */
     .minimap-card {
       width: 80px; height: 130px; background: rgba(18, 18, 18, 0.88);
       backdrop-filter: blur(8px); border-radius: 10px; border: 1px solid #333;
@@ -83,30 +81,48 @@
       background: #00ffff; color: #000;
     }
 
-    /* 街景視窗 */
+    /* 街景彈窗及覆蓋層 */
     #streetviewModal {
       display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
       background: #000; z-index: 50; flex-direction: column;
     }
     #streetviewModal iframe { width: 100%; height: 100%; border: none; }
     
+    /* 街景頂部操作控制列 */
     .sv-navbar {
       position: absolute; top: 12px; left: 12px; right: 12px;
       display: flex; justify-content: space-between; align-items: center;
-      background: rgba(18, 18, 18, 0.88); backdrop-filter: blur(8px);
+      background: rgba(18, 18, 18, 0.9); backdrop-filter: blur(8px);
       padding: 8px 12px; border-radius: 10px; border: 1px solid #333; z-index: 55;
     }
     .sv-title { font-size: 13px; font-weight: bold; color: #00ffff; }
     .sv-nav-btns { display: flex; gap: 6px; }
     .sv-nav-btn {
       background: #2a2a2a; color: #fff; border: 1px solid #555;
-      padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: bold; cursor: pointer;
+      padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; cursor: pointer;
     }
     .sv-nav-btn:hover { background: #fc5200; border-color: #fc5200; }
     .sv-close-btn {
       background: #d93025; color: #fff; border: none; padding: 4px 10px;
       border-radius: 6px; font-size: 12px; font-weight: bold; cursor: pointer;
     }
+
+    /* 街景左上角巨幅地名標題 */
+    .sv-city-label {
+      position: absolute; top: 64px; left: 18px; z-index: 55;
+      font-size: 34px; font-weight: 900; color: #ff3b30;
+      text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9), 0 0 14px rgba(255, 59, 48, 0.4);
+      letter-spacing: 2px; pointer-events: none;
+    }
+
+    /* 街景右上角雷達縮圖卡片 */
+    .sv-minimap-card {
+      position: absolute; top: 64px; right: 14px; z-index: 55;
+      width: 74px; height: 120px; background: rgba(18, 18, 18, 0.88);
+      backdrop-filter: blur(8px); border-radius: 10px; border: 1.5px solid #ff3b30;
+      padding: 4px; box-sizing: border-box; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.7);
+    }
+    #svMinimapCanvas { width: 100%; height: 100%; display: block; }
 
     .hud-bottom {
       background: rgba(18, 18, 18, 0.85); backdrop-filter: blur(8px);
@@ -164,6 +180,7 @@
   <div id="render-container">
     <div id="map"></div>
 
+    <!-- 街景彈窗視窗 (含地名與右上縮圖) -->
     <div id="streetviewModal">
       <div class="sv-navbar">
         <div class="sv-title" id="svInfoTitle">休息站街景</div>
@@ -173,6 +190,15 @@
           <button class="sv-close-btn" id="closeModal">✕</button>
         </div>
       </div>
+      
+      <!-- 醒目地名 -->
+      <div class="sv-city-label" id="svCityLabel">台南市</div>
+      
+      <!-- 右上角縮圖雷達 -->
+      <div class="sv-minimap-card">
+        <canvas id="svMinimapCanvas" width="148" height="240"></canvas>
+      </div>
+
       <iframe id="svFrame" src=""></iframe>
     </div>
 
@@ -301,19 +327,71 @@
       if (trackPoints.length > 0) initRoute();
     });
 
+    // 街景視窗右上縮圖渲染
+    const svMiniCanvas = document.getElementById('svMinimapCanvas');
+    const svMiniCtx = svMiniCanvas.getContext('2d');
+
+    function drawStreetviewMinimap(restPoint) {
+      if (!miniBounds || trackPoints.length === 0) return;
+      svMiniCtx.clearRect(0, 0, svMiniCanvas.width, svMiniCanvas.height);
+
+      const pad = 8;
+      const w = svMiniCanvas.width - pad * 2;
+      const h = svMiniCanvas.height - pad * 2;
+
+      const scaleX = w / miniBounds.spanX;
+      const scaleY = h / miniBounds.spanY;
+      const scale = Math.min(scaleX, scaleY);
+
+      const offsetX = pad + (w - miniBounds.spanX * scale) / 2;
+      const offsetY = pad + (h - miniBounds.spanY * scale) / 2;
+
+      function toPos(p) {
+        return {
+          x: offsetX + (p.lon - miniBounds.minX) * scale,
+          y: offsetY + (miniBounds.maxY - p.lat) * scale
+        };
+      }
+
+      // 1. 全路徑黑線
+      svMiniCtx.beginPath();
+      svMiniCtx.strokeStyle = '#666';
+      svMiniCtx.lineWidth = 3;
+      svMiniCtx.lineCap = 'round';
+      svMiniCtx.lineJoin = 'round';
+      trackPoints.forEach((p, i) => {
+        const pos = toPos(p);
+        if (i === 0) svMiniCtx.moveTo(pos.x, pos.y);
+        else svMiniCtx.lineTo(pos.x, pos.y);
+      });
+      svMiniCtx.stroke();
+
+      // 2. 當前休息站紅點
+      const ptPos = toPos(restPoint);
+      svMiniCtx.beginPath();
+      svMiniCtx.arc(ptPos.x, ptPos.y, 6, 0, Math.PI * 2);
+      svMiniCtx.fillStyle = '#ff3b30';
+      svMiniCtx.fill();
+      svMiniCtx.lineWidth = 2;
+      svMiniCtx.strokeStyle = '#ffffff';
+      svMiniCtx.stroke();
+    }
+
     function openRestStreetView(restIdx) {
       if (restIdx < 0 || restIdx >= restStops.length) return;
       currentRestIndex = restIdx;
       const r = restStops[restIdx];
       const title = `${r.order}次 ${formatMinOnly(r.durationSec)} / ${formatClockTime(r.accumRestSec)}`;
-      openStreetView(r.lat, r.lon, title);
-    }
+      const cityName = estimateTaiwanCity(r.lat);
 
-    function openStreetView(lat, lon, titleText) {
       const modal = document.getElementById('streetviewModal');
       const frame = document.getElementById('svFrame');
-      document.getElementById('svInfoTitle').innerText = titleText || "街景模式";
-      frame.src = `https://maps.google.com/maps?q=&layer=c&cbll=${lat},${lon}&cbp=11,0,0,0,0&output=svembed`;
+      
+      document.getElementById('svInfoTitle').innerText = title;
+      document.getElementById('svCityLabel').innerText = cityName;
+      frame.src = `https://maps.google.com/maps?q=&layer=c&cbll=${r.lat},${r.lon}&cbp=11,0,0,0,0&output=svembed`;
+      
+      drawStreetviewMinimap(r);
       modal.style.display = 'flex';
     }
 
@@ -416,7 +494,6 @@
       const totalRestMin = restStops.length > 0 ? Math.round(restStops[restStops.length - 1].accumRestSec / 60) : 0;
       document.getElementById('status').innerText = `已載入 ${trackPoints.length} 點 | 休息: ${totalRestCount} 次 (總計 ${totalRestMin} 分鐘)`;
 
-      // 計算縮圖邊界，並加入防除以零邊界保護
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
       trackPoints.forEach(p => {
         if (p.lon < minX) minX = p.lon;
@@ -635,7 +712,6 @@
       return `${m}分`;
     }
 
-    // 穩固的右上角縮圖繪製器（保證有底線與橘色動態進度）
     function drawMinimap(idx) {
       if (!miniBounds || trackPoints.length === 0) return;
       miniCtx.clearRect(0, 0, miniCanvas.width, miniCanvas.height);
@@ -658,7 +734,6 @@
         };
       }
 
-      // 1. 全路徑灰色底線
       miniCtx.beginPath();
       miniCtx.strokeStyle = '#444';
       miniCtx.lineWidth = 3;
@@ -671,7 +746,6 @@
       });
       miniCtx.stroke();
 
-      // 2. 已騎乘橘色軌跡
       miniCtx.beginPath();
       miniCtx.strokeStyle = '#fc5200';
       miniCtx.lineWidth = 4;
@@ -684,7 +758,6 @@
       }
       miniCtx.stroke();
 
-      // 3. 當前位置亮點
       const curPos = toMiniPos(trackPoints[idx]);
       miniCtx.beginPath();
       miniCtx.arc(curPos.x, curPos.y, 5, 0, Math.PI * 2);
@@ -720,7 +793,6 @@
         });
       }
 
-      // 休息藍點與標籤
       const showRestMarkers = document.getElementById('showRestMarkers').checked;
       const passedRestStops = restStops.filter(r => r.dist <= current.dist);
 
@@ -754,7 +826,6 @@
         activeRestMarkers = [];
       }
 
-      // 頂部 HUD 與進度條
       const totalDist = trackPoints[trackPoints.length - 1].dist || 1;
       const pct = Math.min(100, Math.round((current.dist / totalDist) * 100));
       document.getElementById('hudDist').innerText = `${current.dist.toFixed(1)} km`;
@@ -767,7 +838,6 @@
         document.getElementById('hudTime').innerText = formatDuration(elapsedSec);
       }
 
-      // 底部數據
       document.getElementById('valAvgSpeed').innerText = current.avgSpeed.toFixed(1);
       document.getElementById('valAvgHR').innerText = current.avgHR || '--';
       document.getElementById('valAscent').innerText = current.ascent;
@@ -844,7 +914,6 @@
       function composeFrame() {
         recCtx.drawImage(mapCanvas, 0, 0, recCanvas.width, recCanvas.height);
 
-        // 標籤框與藍點
         if (document.getElementById('showRestMarkers').checked) {
           const currentProgress = parseFloat(scrubber.value) / 1000;
           const currentIdx = Math.min(trackPoints.length - 1, Math.floor(currentProgress * trackPoints.length));
@@ -880,7 +949,6 @@
           });
         }
 
-        // 頂部 HUD + 實體進度條
         const showDist = document.getElementById('showDist').checked;
         const showTime = document.getElementById('showTime').checked;
         if (showDist || showTime) {
@@ -897,7 +965,6 @@
             recCtx.font = '22px sans-serif';
             recCtx.fillText(document.getElementById('hudPct').innerText, 220, 78);
 
-            // 輸出影片上的進度條
             const curProg = parseFloat(scrubber.value) / 1000;
             recCtx.fillStyle = 'rgba(255, 255, 255, 0.2)';
             recCtx.fillRect(50, 92, 380, 6);
@@ -916,7 +983,6 @@
           }
         }
 
-        // 右上角縮圖
         if (document.getElementById('showMinimap').checked) {
           recCtx.fillStyle = 'rgba(18, 18, 18, 0.88)';
           recCtx.roundRect(recCanvas.width - 180, 32, 148, 250, 14);
@@ -924,7 +990,6 @@
           recCtx.drawImage(miniCanvas, recCanvas.width - 180, 32, 148, 250);
         }
 
-        // 底部數據
         const activeBoxes = [];
         if (document.getElementById('showAvgSpeed').checked) activeBoxes.push({ label: '均速', val: document.getElementById('valAvgSpeed').innerText, unit: 'km/h' });
         if (document.getElementById('showAvgHR').checked) activeBoxes.push({ label: '平均心率', val: document.getElementById('valAvgHR').innerText, unit: 'bpm' });
