@@ -14,14 +14,14 @@
     .control-group { background: #1e1e1e; padding: 14px; border-radius: 8px; font-size: 14px; }
     .control-group label { display: block; margin-bottom: 6px; font-weight: bold; }
     .checkbox-group label { display: flex; align-items: center; gap: 8px; font-weight: normal; margin-bottom: 6px; cursor: pointer; }
-    input[type="range"], select { width: 100%; accent-color: #fc5200; }
-    select { padding: 6px; background: #2a2a2a; color: #fff; border: 1px solid #444; border-radius: 4px; margin-bottom: 8px; }
+    input[type="range"] { width: 100%; accent-color: #fc5200; }
     button {
       background: #fc5200; color: #fff; border: none; padding: 10px 14px;
       border-radius: 6px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 6px;
     }
     button:disabled { background: #555; cursor: not-allowed; }
 
+    /* 9:16 直式容器 */
     #render-container {
       position: relative; width: 360px; height: 640px;
       border-radius: 16px; overflow: hidden; background: #000; border: 2px solid #333;
@@ -33,15 +33,29 @@
       pointer-events: none; display: flex; flex-direction: column; justify-content: space-between;
       padding: 16px; box-sizing: border-box; z-index: 10;
     }
+    
+    .hud-top-bar {
+      display: flex; justify-content: space-between; align-items: flex-start;
+    }
     .hud-top {
       background: rgba(18, 18, 18, 0.85); backdrop-filter: blur(8px);
-      padding: 12px 16px; border-radius: 12px; display: flex; flex-direction: column; gap: 4px;
+      padding: 10px 14px; border-radius: 12px; display: flex; flex-direction: column; gap: 4px;
     }
     .hud-top-line { display: flex; align-items: baseline; gap: 8px; }
-    .hud-top .dist { font-size: 24px; font-weight: bold; color: #fff; }
-    .hud-top .pct { font-size: 14px; color: #888; }
-    .hud-top .time { font-size: 13px; color: #fc5200; font-weight: bold; }
+    .hud-top .dist { font-size: 22px; font-weight: bold; color: #fff; }
+    .hud-top .pct { font-size: 13px; color: #888; }
+    .hud-top .sub { display: flex; gap: 8px; font-size: 12px; }
+    .hud-top .city { color: #fc5200; font-weight: bold; }
+    .hud-top .time { color: #aaa; }
     
+    /* 右上角迷你雷達全圖 */
+    .minimap-card {
+      width: 76px; height: 128px; background: rgba(18, 18, 18, 0.85);
+      backdrop-filter: blur(8px); border-radius: 10px; border: 1px solid #333;
+      position: relative; padding: 4px; box-sizing: border-box;
+    }
+    #minimapCanvas { width: 100%; height: 100%; }
+
     .hud-bottom {
       background: rgba(18, 18, 18, 0.85); backdrop-filter: blur(8px);
       padding: 12px 6px; border-radius: 14px; display: flex; justify-content: space-around; text-align: center;
@@ -50,6 +64,9 @@
     .hud-stat-box .title { font-size: 11px; color: #888; font-weight: bold; margin-bottom: 2px; }
     .hud-stat-box .num { font-size: 20px; font-weight: bold; color: #fff; }
     .hud-stat-box .unit { font-size: 10px; color: #aaa; margin-left: 1px; }
+
+    /* 後台 9:16 純淨錄影畫布 */
+    #recorderCanvas { display: none; }
   </style>
 </head>
 <body>
@@ -69,16 +86,12 @@
       <label><input type="checkbox" id="showCad" checked> 踩踏踏頻 (rpm)</label>
       <label><input type="checkbox" id="showDist" checked> 累積里程與進度</label>
       <label><input type="checkbox" id="showTime" checked> 已騎乘時間</label>
+      <label><input type="checkbox" id="showMinimap" checked> 右上角全島雷達圖</label>
     </div>
 
     <div class="control-group">
-      <label>3. 鏡頭視角模式</label>
-      <select id="cameraMode">
-        <option value="chase">3D 後上方動態跟拍 (臨場破風感)</option>
-        <option value="overview">全景俯瞰視角</option>
-      </select>
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-        <label style="margin:0;">軌跡進度控制</label>
+        <label style="margin:0;">3. 軌跡進度控制</label>
         <span id="scrubberPercent" style="font-size:12px; color:#fc5200; font-weight:bold;">0%</span>
       </div>
       <input type="range" id="progressScrubber" min="0" max="1000" value="0" disabled />
@@ -92,20 +105,29 @@
     <div class="control-group">
       <label>5. 操作控制</label>
       <button id="btnPlay" disabled>播放預覽</button>
-      <button id="btnRecord" disabled style="background:#28a745;">錄製並下載 IG 限動 (WebM)</button>
+      <button id="btnRecord" disabled style="background:#28a745;">一鍵匯出限動影片 (WebM)</button>
     </div>
   </div>
 
   <div id="render-container">
     <div id="map"></div>
     <div class="hud-overlay" id="hudContainer">
-      <div class="hud-top" id="topHud">
-        <div class="hud-top-line" id="distLine">
-          <span class="dist" id="hudDist">0.0 km</span>
-          <span class="pct" id="hudPct">/ 0.0 km (0%)</span>
+      <div class="hud-top-bar">
+        <div class="hud-top" id="topHud">
+          <div class="hud-top-line" id="distLine">
+            <span class="dist" id="hudDist">0.0 km</span>
+            <span class="pct" id="hudPct">/ 0.0 km (0%)</span>
+          </div>
+          <div class="sub">
+            <span class="city" id="hudCity">台灣</span>
+            <span class="time" id="hudTime">00:00:00</span>
+          </div>
         </div>
-        <div class="time" id="hudTime" style="display:none;">時間: 00:00:00</div>
+        <div class="minimap-card" id="minimapCard">
+          <canvas id="minimapCanvas" width="152" height="256"></canvas>
+        </div>
       </div>
+
       <div class="hud-bottom" id="bottomHud">
         <div class="hud-stat-box" id="boxSpeed">
           <div class="title">時速</div>
@@ -127,13 +149,15 @@
     </div>
   </div>
 
+  <canvas id="recorderCanvas" width="720" height="1280"></canvas>
+
   <script>
     let trackPoints = [];
     let isPlaying = false;
     let animTimer = null;
     let startTimeEpoch = 0;
-    let fullBounds = null;
     let isMapLoaded = false;
+    let miniBounds = null;
 
     const satelliteStyle = {
       version: 8,
@@ -157,9 +181,10 @@
       container: 'map',
       style: satelliteStyle,
       center: [120.982024, 23.973875],
-      zoom: 7,
-      pitch: 0,
-      bearing: 0
+      zoom: 9.2,
+      pitch: 45,
+      bearing: 0,
+      preserveDrawingBuffer: true
     });
 
     map.on('load', () => {
@@ -172,7 +197,7 @@
         id: 'full-route-line',
         type: 'line',
         source: 'full-route',
-        paint: { 'line-color': '#000000', 'line-width': 6, 'line-opacity': 0.4 }
+        paint: { 'line-color': '#000000', 'line-width': 5, 'line-opacity': 0.4 }
       });
 
       map.addSource('active-route', {
@@ -183,7 +208,7 @@
         id: 'active-route-line',
         type: 'line',
         source: 'active-route',
-        paint: { 'line-color': '#fc5200', 'line-width': 5 }
+        paint: { 'line-color': '#fc5200', 'line-width': 4 }
       });
 
       map.addSource('point-cursor', {
@@ -195,19 +220,20 @@
         type: 'circle',
         source: 'point-cursor',
         paint: {
-          'circle-radius': 8,
+          'circle-radius': 7,
           'circle-color': '#ffffff',
           'circle-stroke-width': 3,
           'circle-stroke-color': '#fc5200'
         }
       });
 
-      if (trackPoints.length > 0) initRouteLayers();
+      if (trackPoints.length > 0) initRoute();
     });
 
     const scrubber = document.getElementById('progressScrubber');
     const scrubberTxt = document.getElementById('scrubberPercent');
-    const cameraModeSelect = document.getElementById('cameraMode');
+    const miniCanvas = document.getElementById('minimapCanvas');
+    const miniCtx = miniCanvas.getContext('2d');
 
     document.getElementById('tcxInput').addEventListener('change', function(e) {
       const file = e.target.files[0];
@@ -220,23 +246,30 @@
           trackPoints = downsample(raw, 900);
           startTimeEpoch = trackPoints[0].timestamp;
           document.getElementById('status').innerText = `已載入 ${trackPoints.length} 個點位`;
-          
+
+          // 計算全島雷達圖邊界
+          let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+          trackPoints.forEach(p => {
+            if (p.lon < minX) minX = p.lon;
+            if (p.lon > maxX) maxX = p.lon;
+            if (p.lat < minY) minY = p.lat;
+            if (p.lat > maxY) maxY = p.lat;
+          });
+          miniBounds = { minX, maxX, minY, maxY };
+
           document.getElementById('btnPlay').disabled = false;
           document.getElementById('btnRecord').disabled = false;
           scrubber.disabled = false;
           scrubber.value = 0;
           scrubberTxt.innerText = "0%";
 
-          const coords = trackPoints.map(p => [p.lon, p.lat]);
-          fullBounds = coords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
-
-          if (isMapLoaded) initRouteLayers();
+          if (isMapLoaded) initRoute();
         }
       };
       reader.readAsText(file);
     });
 
-    function initRouteLayers() {
+    function initRoute() {
       const coords = trackPoints.map(p => [p.lon, p.lat]);
       if (map.getSource('full-route')) {
         map.getSource('full-route').setData({
@@ -328,11 +361,21 @@
       return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     }
 
-    function getBearing(startLat, startLng, destLat, destLng) {
-      const y = Math.sin((destLng - startLng) * Math.PI / 180) * Math.cos(destLat * Math.PI / 180);
-      const x = Math.cos(startLat * Math.PI / 180) * Math.sin(destLat * Math.PI / 180) -
-                Math.sin(startLat * Math.PI / 180) * Math.cos(destLat * Math.PI / 180) * Math.cos((destLng - startLng) * Math.PI / 180);
-      return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+    // 粗估西海岸騎乘經過之縣市
+    function estimateTaiwanCity(lat) {
+      if (lat >= 25.15) return "新北 富貴角";
+      if (lat >= 25.00) return "新北市";
+      if (lat >= 24.85) return "桃園市";
+      if (lat >= 24.68) return "新竹縣市";
+      if (lat >= 24.36) return "苗栗縣";
+      if (lat >= 24.12) return "台中市";
+      if (lat >= 23.85) return "彰化縣";
+      if (lat >= 23.55) return "雲林縣";
+      if (lat >= 23.25) return "嘉義縣";
+      if (lat >= 22.90) return "台南市";
+      if (lat >= 22.50) return "高雄市";
+      if (lat >= 22.00) return "屏東 枋山";
+      return "屏東 鵝鑾鼻";
     }
 
     function formatDuration(sec) {
@@ -342,48 +385,81 @@
       return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     }
 
+    // 繪製右上角迷你雷達全圖
+    function drawMinimap(idx) {
+      if (!miniBounds) return;
+      miniCtx.clearRect(0, 0, miniCanvas.width, miniCanvas.height);
+
+      const pad = 12;
+      const w = miniCanvas.width - pad * 2;
+      const h = miniCanvas.height - pad * 2;
+      const scaleX = w / (miniBounds.maxX - miniBounds.minX || 1);
+      const scaleY = h / (miniBounds.maxY - miniBounds.minY || 1);
+      const scale = Math.min(scaleX, scaleY);
+
+      function toMiniPos(p) {
+        const x = pad + (p.lon - miniBounds.minX) * scale + (w - (miniBounds.maxX - miniBounds.minX) * scale) / 2;
+        const y = pad + (miniBounds.maxY - p.lat) * scale;
+        return { x, y };
+      }
+
+      // 底線
+      miniCtx.beginPath();
+      miniCtx.strokeStyle = '#444';
+      miniCtx.lineWidth = 3;
+      trackPoints.forEach((p, i) => {
+        const pos = toMiniPos(p);
+        if (i === 0) miniCtx.moveTo(pos.x, pos.y);
+        else miniCtx.lineTo(pos.x, pos.y);
+      });
+      miniCtx.stroke();
+
+      // 橘色動態線
+      miniCtx.beginPath();
+      miniCtx.strokeStyle = '#fc5200';
+      miniCtx.lineWidth = 4;
+      for (let i = 0; i <= idx; i++) {
+        const pos = toMiniPos(trackPoints[i]);
+        if (i === 0) miniCtx.moveTo(pos.x, pos.y);
+        else miniCtx.lineTo(pos.x, pos.y);
+      }
+      miniCtx.stroke();
+
+      // 當前位置小紅點
+      const curPos = toMiniPos(trackPoints[idx]);
+      miniCtx.beginPath();
+      miniCtx.arc(curPos.x, curPos.y, 5, 0, Math.PI * 2);
+      miniCtx.fillStyle = '#ffffff';
+      miniCtx.fill();
+      miniCtx.lineWidth = 2;
+      miniCtx.strokeStyle = '#fc5200';
+      miniCtx.stroke();
+    }
+
     function updateFrame(idx) {
       if (!trackPoints.length || !isMapLoaded) return;
       const current = trackPoints[idx];
-      const mode = cameraModeSelect.value;
 
-      try {
-        if (mode === 'chase') {
-          const nextIdx = Math.min(idx + 2, trackPoints.length - 1);
-          const nextPt = trackPoints[nextIdx];
-          const bearing = (idx < trackPoints.length - 1) 
-            ? getBearing(current.lat, current.lon, nextPt.lat, nextPt.lon)
-            : map.getBearing();
+      // 高空鳥瞰俯瞰前進（平滑跟隨、固定方向正北）
+      map.jumpTo({
+        center: [current.lon, current.lat],
+        zoom: 9.2,
+        pitch: 45,
+        bearing: 0
+      });
 
-          map.jumpTo({
-            center: [current.lon, current.lat],
-            zoom: 13.5,
-            pitch: 60,
-            bearing: bearing
-          });
-        } else {
-          if (fullBounds) {
-            map.fitBounds(fullBounds, { padding: 30, duration: 0 });
-            map.setPitch(0);
-            map.setBearing(0);
-          }
-        }
-
-        const activeCoords = trackPoints.slice(0, idx + 1).map(p => [p.lon, p.lat]);
-        if (map.getSource('active-route')) {
-          map.getSource('active-route').setData({
-            type: 'Feature',
-            geometry: { type: 'LineString', coordinates: activeCoords }
-          });
-        }
-        if (map.getSource('point-cursor')) {
-          map.getSource('point-cursor').setData({
-            type: 'Feature',
-            geometry: { type: 'Point', coordinates: [current.lon, current.lat] }
-          });
-        }
-      } catch (err) {
-        // 忽略邊界過載例外
+      const activeCoords = trackPoints.slice(0, idx + 1).map(p => [p.lon, p.lat]);
+      if (map.getSource('active-route')) {
+        map.getSource('active-route').setData({
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: activeCoords }
+        });
+      }
+      if (map.getSource('point-cursor')) {
+        map.getSource('point-cursor').setData({
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [current.lon, current.lat] }
+        });
       }
 
       // 更新 HUD
@@ -392,9 +468,11 @@
       document.getElementById('hudDist').innerText = `${current.dist.toFixed(1)} km`;
       document.getElementById('hudPct').innerText = `/ ${totalDist.toFixed(1)} km (${pct}%)`;
 
+      document.getElementById('hudCity').innerText = estimateTaiwanCity(current.lat);
+
       if (startTimeEpoch && current.timestamp) {
         const elapsedSec = Math.max(0, (current.timestamp - startTimeEpoch) / 1000);
-        document.getElementById('hudTime').innerText = `時間: ${formatDuration(elapsedSec)}`;
+        document.getElementById('hudTime').innerText = formatDuration(elapsedSec);
       }
 
       document.getElementById('valSpeed').innerText = current.speed;
@@ -403,19 +481,22 @@
       document.getElementById('valElev').innerText = current.alt;
       document.getElementById('valCad').innerText = current.cad || '--';
 
+      // 顯隱邏輯
       const showDist = document.getElementById('showDist').checked;
       const showTime = document.getElementById('showTime').checked;
       document.getElementById('topHud').style.display = (showDist || showTime) ? 'flex' : 'none';
       document.getElementById('distLine').style.display = showDist ? 'flex' : 'none';
-      document.getElementById('hudTime').style.display = showTime ? 'block' : 'none';
+      document.getElementById('hudTime').style.display = showTime ? 'inline' : 'none';
+      document.getElementById('minimapCard').style.display = document.getElementById('showMinimap').checked ? 'block' : 'none';
 
       document.getElementById('boxSpeed').style.display = document.getElementById('showSpeed').checked ? 'block' : 'none';
       document.getElementById('boxHR').style.display = document.getElementById('showHR').checked ? 'block' : 'none';
       document.getElementById('boxElev').style.display = document.getElementById('showElev').checked ? 'block' : 'none';
       document.getElementById('boxCad').style.display = document.getElementById('showCad').checked ? 'block' : 'none';
+
+      drawMinimap(idx);
     }
 
-    // 穩固的定時器播放機制（保證順暢前進、滑桿連動）
     function runAnimation(onFinish) {
       if (isPlaying) stopAnimation();
       isPlaying = true;
@@ -455,51 +536,113 @@
       else runAnimation();
     });
 
-    // 螢幕與音視訊捕捉匯出（解決跨域問題）
-    document.getElementById('btnRecord').addEventListener('click', async function() {
+    // 純淨 9:16 後台畫布錄影合成引擎（100% 只錄右側直式視窗）
+    document.getElementById('btnRecord').addEventListener('click', function() {
       const btn = this;
-      if (isPlaying) stopAnimation();
+      btn.disabled = true;
+      btn.innerText = '正在合成輸出 9:16 限動...';
 
-      try {
-        btn.disabled = true;
-        btn.innerText = '請在彈窗選擇「這個分頁」...';
+      const recCanvas = document.getElementById('recorderCanvas');
+      const recCtx = recCanvas.getContext('2d');
+      const mapCanvas = map.getCanvas();
 
-        // 使用瀏覽器原生分頁螢幕錄影 API（100% 繞過跨域限制，並完整錄下地圖 + HUD）
-        const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: { frameRate: 30 },
-          audio: false
-        });
+      function composeFrame() {
+        // 1. 抓取地圖畫面
+        recCtx.drawImage(mapCanvas, 0, 0, recCanvas.width, recCanvas.height);
 
-        btn.innerText = '錄製中...請勿切換分頁';
-        const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
-        const chunks = [];
+        // 2. 疊加頂部 HUD
+        const showDist = document.getElementById('showDist').checked;
+        const showTime = document.getElementById('showTime').checked;
+        if (showDist || showTime) {
+          recCtx.fillStyle = 'rgba(18, 18, 18, 0.85)';
+          recCtx.roundRect(32, 32, 420, 110, 16);
+          recCtx.fill();
 
-        recorder.ondataavailable = e => chunks.push(e.data);
-        recorder.onstop = () => {
-          stream.getTracks().forEach(track => track.stop());
-          const blob = new Blob(chunks, { type: 'video/webm' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `ride_story_${Date.now()}.webm`;
-          a.click();
-          btn.disabled = false;
-          btn.innerText = '錄製並下載 IG 限動 (WebM)';
-        };
+          if (showDist) {
+            recCtx.fillStyle = '#ffffff';
+            recCtx.font = 'bold 36px sans-serif';
+            recCtx.fillText(document.getElementById('hudDist').innerText, 50, 82);
 
-        recorder.start();
+            recCtx.fillStyle = '#888888';
+            recCtx.font = '22px sans-serif';
+            recCtx.fillText(document.getElementById('hudPct').innerText, 220, 82);
+          }
 
-        // 從頭播放
-        scrubber.value = 0;
-        runAnimation(() => {
-          recorder.stop();
-        });
+          recCtx.fillStyle = '#fc5200';
+          recCtx.font = 'bold 22px sans-serif';
+          recCtx.fillText(document.getElementById('hudCity').innerText, 50, 122);
 
-      } catch (err) {
-        alert('錄製取消或未取得螢幕分享權限');
-        btn.disabled = false;
-        btn.innerText = '錄製並下載 IG 限動 (WebM)';
+          if (showTime) {
+            recCtx.fillStyle = '#aaaaaa';
+            recCtx.font = '20px sans-serif';
+            recCtx.fillText(document.getElementById('hudTime').innerText, 220, 122);
+          }
+        }
+
+        // 3. 疊加右上角雷達圖
+        if (document.getElementById('showMinimap').checked) {
+          recCtx.fillStyle = 'rgba(18, 18, 18, 0.85)';
+          recCtx.roundRect(recCanvas.width - 180, 32, 148, 250, 14);
+          recCtx.fill();
+          recCtx.drawImage(miniCanvas, recCanvas.width - 180, 32, 148, 250);
+        }
+
+        // 4. 疊加底部 HUD
+        const activeBoxes = [];
+        if (document.getElementById('showSpeed').checked) activeBoxes.push({ label: '時速', val: document.getElementById('valSpeed').innerText, unit: 'km/h' });
+        if (document.getElementById('showHR').checked) activeBoxes.push({ label: '心率', val: document.getElementById('valHR').innerText, unit: 'bpm' });
+        if (document.getElementById('showElev').checked) activeBoxes.push({ label: '海拔', val: document.getElementById('valElev').innerText, unit: 'm' });
+        if (document.getElementById('showCad').checked) activeBoxes.push({ label: '踏頻', val: document.getElementById('valCad').innerText, unit: 'rpm' });
+
+        if (activeBoxes.length > 0) {
+          const bY = recCanvas.height - 180;
+          const bW = (recCanvas.width - 64) / activeBoxes.length;
+
+          recCtx.fillStyle = 'rgba(18, 18, 18, 0.9)';
+          recCtx.roundRect(32, bY, recCanvas.width - 64, 110, 18);
+          recCtx.fill();
+
+          activeBoxes.forEach((item, i) => {
+            const ix = 52 + (i * bW);
+            recCtx.fillStyle = '#888888';
+            recCtx.font = 'bold 18px sans-serif';
+            recCtx.fillText(item.label, ix, bY + 36);
+
+            recCtx.fillStyle = '#ffffff';
+            recCtx.font = 'bold 36px sans-serif';
+            recCtx.fillText(item.val, ix, bY + 82);
+
+            recCtx.fillStyle = '#aaaaaa';
+            recCtx.font = '16px sans-serif';
+            recCtx.fillText(item.unit, ix + (item.val.length * 20) + 4, bY + 82);
+          });
+        }
       }
+
+      const stream = recCanvas.captureStream(30);
+      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+      const chunks = [];
+
+      recorder.ondataavailable = e => chunks.push(e.data);
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ride_story_${Date.now()}.webm`;
+        a.click();
+        btn.disabled = false;
+        btn.innerText = '一鍵匯出限動影片 (WebM)';
+      };
+
+      recorder.start();
+      const syncInterval = setInterval(composeFrame, 1000 / 30);
+
+      scrubber.value = 0;
+      runAnimation(() => {
+        clearInterval(syncInterval);
+        recorder.stop();
+      });
     });
 
     document.querySelectorAll('.checkbox-group input').forEach(box => {
@@ -509,13 +652,6 @@
           updateFrame(Math.floor((val / 1000) * (trackPoints.length - 1)));
         }
       });
-    });
-
-    cameraModeSelect.addEventListener('change', () => {
-      if (trackPoints.length) {
-        const val = Math.max(0, Math.min(1000, parseInt(scrubber.value, 10)));
-        updateFrame(Math.floor((val / 1000) * (trackPoints.length - 1)));
-      }
     });
 
     document.getElementById('durationSlider').addEventListener('input', e => {
