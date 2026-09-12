@@ -53,7 +53,7 @@
     }
     #minimapCanvas { width: 100%; height: 100%; }
 
-    /* 藍點旁手寫風/引線標籤 DOM 樣式 */
+    /* 藍點旁標籤 DOM 樣式 */
     .rest-marker-container {
       display: flex; align-items: center; pointer-events: auto; cursor: pointer;
       transform: translate(-6px, -6px);
@@ -72,18 +72,7 @@
       background: #00ffff; color: #000; transform: scale(1.08);
     }
 
-    /* 街景小人按鈕 */
-    #streetview-pegman {
-      position: absolute; right: 16px; bottom: 170px; width: 44px; height: 44px;
-      background: #ffffff; border-radius: 50%; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-      display: flex; align-items: center; justify-content: center; cursor: pointer;
-      z-index: 30; border: 2px solid #fc5200; transition: transform 0.15s;
-    }
-    #streetview-pegman:hover { transform: scale(1.1); }
-    #streetview-pegman.active { background: #fc5200; }
-    #streetview-pegman svg { width: 26px; height: 26px; }
-
-    /* 街景全螢幕視窗 + 導航控制器 */
+    /* 街景彈窗全螢幕視窗 + 控制列 */
     #streetviewModal {
       display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
       background: #000; z-index: 50; flex-direction: column;
@@ -164,14 +153,7 @@
   <div id="render-container">
     <div id="map"></div>
 
-    <div id="streetview-pegman" title="切換街景點擊模式">
-      <svg viewBox="0 0 24 24">
-        <circle cx="12" cy="5" r="3" fill="#fbbc04"/>
-        <path d="M12 9c-2.2 0-4 1.8-4 4v7h2.5v-5h3v5H16v-7c0-2.2-1.8-4-4-4z" fill="#fbbc04"/>
-      </svg>
-    </div>
-
-    <!-- 附帶上一站/下一站控制列的街景視窗 -->
+    <!-- 街景彈窗視窗 -->
     <div id="streetviewModal">
       <div class="sv-navbar">
         <div class="sv-title" id="svInfoTitle">休息站街景</div>
@@ -228,13 +210,12 @@
     let trackPoints = [];
     let restStops = [];
     let activeRestMarkers = [];
-    let currentRestIndex = -1; // 當前正在看第幾個休息站
+    let currentRestIndex = -1;
     let isPlaying = false;
     let animTimer = null;
     let startTimeEpoch = 0;
     let isMapLoaded = false;
     let miniBounds = null;
-    let isPegmanActive = false;
 
     const satelliteStyle = {
       version: 8,
@@ -307,24 +288,7 @@
       if (trackPoints.length > 0) initRoute();
     });
 
-    // 街景小人按鈕
-    const pegmanBtn = document.getElementById('streetview-pegman');
-    pegmanBtn.addEventListener('click', () => {
-      isPegmanActive = !isPegmanActive;
-      pegmanBtn.classList.toggle('active', isPegmanActive);
-      map.getCanvas().style.cursor = isPegmanActive ? 'crosshair' : '';
-    });
-
-    map.on('click', (e) => {
-      if (isPegmanActive) {
-        openStreetView(e.lngLat.lat, e.lngLat.lng, "自選點街景");
-        isPegmanActive = false;
-        pegmanBtn.classList.remove('active');
-        map.getCanvas().style.cursor = '';
-      }
-    });
-
-    // 開啟街景並載入導航
+    // 街景導航控制
     function openRestStreetView(restIdx) {
       if (restIdx < 0 || restIdx >= restStops.length) return;
       currentRestIndex = restIdx;
@@ -347,15 +311,11 @@
     });
 
     document.getElementById('btnPrevRest').addEventListener('click', () => {
-      if (currentRestIndex > 0) {
-        openRestStreetView(currentRestIndex - 1);
-      }
+      if (currentRestIndex > 0) openRestStreetView(currentRestIndex - 1);
     });
 
     document.getElementById('btnNextRest').addEventListener('click', () => {
-      if (currentRestIndex < restStops.length - 1) {
-        openRestStreetView(currentRestIndex + 1);
-      }
+      if (currentRestIndex < restStops.length - 1) openRestStreetView(currentRestIndex + 1);
     });
 
     const scrubber = document.getElementById('progressScrubber');
@@ -436,7 +396,6 @@
       restStops = rests;
       startTimeEpoch = trackPoints[0].timestamp;
 
-      // 清除舊的 HTML 藍點標籤
       activeRestMarkers.forEach(m => m.remove());
       activeRestMarkers = [];
 
@@ -704,7 +663,6 @@
       miniCtx.stroke();
     }
 
-    // 核心更新：使用 HTML DOM Marker，確保藍點與三段文字 100% 顯現且支援點擊跳街景
     function updateFrame(idx) {
       if (!trackPoints.length || !isMapLoaded) return;
       const current = trackPoints[idx];
@@ -730,17 +688,15 @@
         });
       }
 
-      // 渲染藍點 + 文字標籤（HTML DOM Marker）
+      // 渲染藍點 + 文字標籤（點擊立即開啟街景）
       const showRestMarkers = document.getElementById('showRestMarkers').checked;
       const passedRestStops = restStops.filter(r => r.dist <= current.dist);
 
-      // 清除多餘的標記
       while (activeRestMarkers.length > passedRestStops.length) {
         const m = activeRestMarkers.pop();
         m.remove();
       }
 
-      // 建立或更新新通過的標記
       if (showRestMarkers) {
         for (let i = activeRestMarkers.length; i < passedRestStops.length; i++) {
           const r = passedRestStops[i];
@@ -841,7 +797,7 @@
       else runAnimation();
     });
 
-    // 專屬 9:16 純淨輸出（同步將 DOM 標籤座標繪入錄影畫布）
+    // 專屬 9:16 純淨輸出
     document.getElementById('btnRecord').addEventListener('click', function() {
       const btn = this;
       btn.disabled = true;
@@ -854,7 +810,7 @@
       function composeFrame() {
         recCtx.drawImage(mapCanvas, 0, 0, recCanvas.width, recCanvas.height);
 
-        // 繪製已通過的休息站點與文字標籤到輸出影片
+        // 繪製休息站標籤至影片
         if (document.getElementById('showRestMarkers').checked) {
           const currentProgress = parseFloat(scrubber.value) / 1000;
           const currentIdx = Math.min(trackPoints.length - 1, Math.floor(currentProgress * trackPoints.length));
@@ -863,7 +819,6 @@
 
           passed.forEach(r => {
             const p = map.project([r.lon, r.lat]);
-            // 縮放對齊至 720x1280
             const sx = (p.x / map.getContainer().clientWidth) * recCanvas.width;
             const sy = (p.y / map.getContainer().clientHeight) * recCanvas.height;
 
